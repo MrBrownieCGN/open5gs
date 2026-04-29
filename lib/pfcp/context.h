@@ -500,9 +500,45 @@ void ogs_pfcp_rule_remove(ogs_pfcp_rule_t *rule);
 void ogs_pfcp_rule_remove_all(ogs_pfcp_pdr_t *pdr);
 
 int ogs_pfcp_ue_pool_generate(void);
+int ogs_pfcp_ue_pool_generate_for_subnet(ogs_pfcp_subnet_t *subnet);
 ogs_pfcp_ue_ip_t *ogs_pfcp_ue_ip_alloc(
         uint8_t *cause_value, int family, const char *dnn, uint8_t *addr);
 void ogs_pfcp_ue_ip_free(ogs_pfcp_ue_ip_t *ip);
+
+/******************************************************************************
+ * Runtime DNN/APN reload (SIGHUP-driven, add-only)
+ *
+ * ogs_pfcp_context_reload_config() re-reads the local NF section of the
+ * YAML configuration and adds any newly-listed DNNs to self.subnet_list.
+ * Existing DNNs are left fully untouched: their ogs_pfcp_subnet_t pointers,
+ * allocated ogs_pfcp_ue_ip_t objects, and any active ogs_pfcp_sess_t
+ * references that point into them are not mutated.
+ *
+ * On success, *added_list is populated with ogs_pfcp_subnet_t pointers
+ * that are now owned by self.subnet_list. The caller (UPF or SMF reload
+ * handler) uses this list to drive TUN-open / pool-generate, and does NOT
+ * free the entries.
+ *
+ * Drift on existing DNNs (subnet/gateway differs in YAML from the live
+ * config) is detected and warned, but not honored — live sessions hold
+ * old subnet pointers that we will not silently corrupt.
+ *
+ * Phase 1 limitations (out of scope, returned as warnings on parse):
+ *   - DNN/subnet removal at runtime
+ *   - Subnet/gateway mutation of an existing DNN
+ *   - range[] in runtime-added DNNs (only the parent subnet is honored)
+ ******************************************************************************/
+typedef struct ogs_pfcp_reload_result_s {
+    int added;       /* number of DNNs newly added to self.subnet_list */
+    int unchanged;   /* number of DNNs already present, no drift */
+    int drift;       /* number of DNNs already present with config drift */
+    int errors;      /* number of DNNs that failed to parse or alloc */
+} ogs_pfcp_reload_result_t;
+
+int ogs_pfcp_context_reload_config(
+        const char *local, const char *remote,
+        ogs_list_t *added_list,
+        ogs_pfcp_reload_result_t *result);
 
 ogs_pfcp_dev_t *ogs_pfcp_dev_add(const char *ifname);
 void ogs_pfcp_dev_remove(ogs_pfcp_dev_t *dev);

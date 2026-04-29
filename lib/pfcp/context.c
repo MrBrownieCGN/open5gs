@@ -2201,101 +2201,116 @@ void ogs_pfcp_rule_remove_all(ogs_pfcp_pdr_t *pdr)
         ogs_pfcp_rule_remove(rule);
 }
 
-int ogs_pfcp_ue_pool_generate(void)
+static int generate_ue_pool_for_subnet(ogs_pfcp_subnet_t *subnet)
 {
     int i, rv;
+    int maxbytes = 0;
+    int lastindex = 0;
+    uint32_t start[4], end[4], broadcast[4];
+    int rangeindex, num_of_range;
+    int poolindex;
+    int inc;
+
+    ogs_assert(subnet);
+
+    if (subnet->family == AF_INET) {
+        maxbytes = 4;
+        lastindex = 0;
+    } else if (subnet->family == AF_INET6) {
+        maxbytes = 8; /* Default Prefixlen 64bits */
+        lastindex = 1;
+    } else {
+        /* subnet->family might be AF_UNSPEC. So, skip it */
+        return OGS_OK;
+    }
+
+    for (i = 0; i < 4; i++) {
+        broadcast[i] = subnet->sub.sub[i] + ~subnet->sub.mask[i];
+    }
+
+    num_of_range = subnet->num_of_range;
+    if (!num_of_range) num_of_range = 1;
+
+    poolindex = 0;
+    for (rangeindex = 0; rangeindex < num_of_range; rangeindex++) {
+
+        if (subnet->num_of_range &&
+            subnet->range[rangeindex].low) {
+            ogs_ipsubnet_t low;
+            rv = ogs_ipsubnet(&low, subnet->range[rangeindex].low, NULL);
+            ogs_assert(rv == OGS_OK);
+            memcpy(start, low.sub, maxbytes);
+        } else {
+            memcpy(start, subnet->sub.sub, maxbytes);
+        }
+
+        if (subnet->num_of_range &&
+            subnet->range[rangeindex].high) {
+            ogs_ipsubnet_t high;
+            rv = ogs_ipsubnet(&high, subnet->range[rangeindex].high, NULL);
+            ogs_assert(rv == OGS_OK);
+            high.sub[lastindex] += htobe32(1);
+            memcpy(end, high.sub, maxbytes);
+        } else {
+            memcpy(end, broadcast, maxbytes);
+        }
+
+        inc = 0;
+        while(poolindex < ogs_app()->pool.sess) {
+            ogs_pfcp_ue_ip_t *ue_ip = NULL;
+
+            ue_ip = &subnet->pool.array[poolindex];
+            ogs_assert(ue_ip);
+            memset(ue_ip, 0, sizeof *ue_ip);
+            ue_ip->subnet = subnet;
+
+            memcpy(ue_ip->addr, start, maxbytes);
+            ue_ip->addr[lastindex] += htobe32(inc);
+            inc++;
+
+            if (memcmp(ue_ip->addr, end, maxbytes) == 0)
+                break;
+
+            /* Exclude Network Address */
+            if (memcmp(ue_ip->addr, subnet->sub.sub, maxbytes) == 0)
+                continue;
+
+            /* Exclude TUN IP Address */
+            if (memcmp(ue_ip->addr, subnet->gw.sub, maxbytes) == 0)
+                continue;
+
+            /* Allocate Full IPv6 Address */
+            if (lastindex == 1)
+                ue_ip->addr[3] += htobe32(inc);
+
+            ogs_trace("[%d] - %x:%x:%x:%x",
+                    poolindex,
+                    ue_ip->addr[0], ue_ip->addr[1],
+                    ue_ip->addr[2], ue_ip->addr[3]);
+
+            poolindex++;
+        }
+    }
+    subnet->pool.size = subnet->pool.avail = poolindex;
+    return OGS_OK;
+}
+
+int ogs_pfcp_ue_pool_generate(void)
+{
+    int rv;
     ogs_pfcp_subnet_t *subnet = NULL;
 
     ogs_list_for_each(&self.subnet_list, subnet) {
-        int maxbytes = 0;
-        int lastindex = 0;
-        uint32_t start[4], end[4], broadcast[4];
-        int rangeindex, num_of_range;
-        int poolindex;
-        int inc;
-
-        if (subnet->family == AF_INET) {
-            maxbytes = 4;
-            lastindex = 0;
-        } else if (subnet->family == AF_INET6) {
-            maxbytes = 8; /* Default Prefixlen 64bits */
-            lastindex = 1;
-        } else {
-            /* subnet->family might be AF_UNSPEC. So, skip it */
-            continue;
-        }
-
-        for (i = 0; i < 4; i++) {
-            broadcast[i] = subnet->sub.sub[i] + ~subnet->sub.mask[i];
-        }
-
-        num_of_range = subnet->num_of_range;
-        if (!num_of_range) num_of_range = 1;
-
-        poolindex = 0;
-        for (rangeindex = 0; rangeindex < num_of_range; rangeindex++) {
-
-            if (subnet->num_of_range &&
-                subnet->range[rangeindex].low) {
-                ogs_ipsubnet_t low;
-                rv = ogs_ipsubnet(&low, subnet->range[rangeindex].low, NULL);
-                ogs_assert(rv == OGS_OK);
-                memcpy(start, low.sub, maxbytes);
-            } else {
-                memcpy(start, subnet->sub.sub, maxbytes);
-            }
-
-            if (subnet->num_of_range &&
-                subnet->range[rangeindex].high) {
-                ogs_ipsubnet_t high;
-                rv = ogs_ipsubnet(&high, subnet->range[rangeindex].high, NULL);
-                ogs_assert(rv == OGS_OK);
-                high.sub[lastindex] += htobe32(1);
-                memcpy(end, high.sub, maxbytes);
-            } else {
-                memcpy(end, broadcast, maxbytes);
-            }
-
-            inc = 0;
-            while(poolindex < ogs_app()->pool.sess) {
-                ogs_pfcp_ue_ip_t *ue_ip = NULL;
-
-                ue_ip = &subnet->pool.array[poolindex];
-                ogs_assert(ue_ip);
-                memset(ue_ip, 0, sizeof *ue_ip);
-                ue_ip->subnet = subnet;
-
-                memcpy(ue_ip->addr, start, maxbytes);
-                ue_ip->addr[lastindex] += htobe32(inc);
-                inc++;
-
-                if (memcmp(ue_ip->addr, end, maxbytes) == 0)
-                    break;
-
-                /* Exclude Network Address */
-                if (memcmp(ue_ip->addr, subnet->sub.sub, maxbytes) == 0)
-                    continue;
-
-                /* Exclude TUN IP Address */
-                if (memcmp(ue_ip->addr, subnet->gw.sub, maxbytes) == 0)
-                    continue;
-
-                /* Allocate Full IPv6 Address */
-                if (lastindex == 1)
-                    ue_ip->addr[3] += htobe32(inc);
-
-                ogs_trace("[%d] - %x:%x:%x:%x",
-                        poolindex,
-                        ue_ip->addr[0], ue_ip->addr[1],
-                        ue_ip->addr[2], ue_ip->addr[3]);
-
-                poolindex++;
-            }
-        }
-        subnet->pool.size = subnet->pool.avail = poolindex;
+        rv = generate_ue_pool_for_subnet(subnet);
+        if (rv != OGS_OK) return rv;
     }
 
     return OGS_OK;
+}
+
+int ogs_pfcp_ue_pool_generate_for_subnet(ogs_pfcp_subnet_t *subnet)
+{
+    return generate_ue_pool_for_subnet(subnet);
 }
 
 ogs_pfcp_ue_ip_t *ogs_pfcp_ue_ip_alloc(
@@ -2574,4 +2589,350 @@ void ogs_pfcp_pool_final(ogs_pfcp_sess_t *sess)
     ogs_pool_destroy(&sess->urr_id_pool);
     ogs_pool_destroy(&sess->qer_id_pool);
     ogs_pool_destroy(&sess->bar_id_pool);
+}
+
+/******************************************************************************
+ * Runtime DNN/APN reload helpers
+ *
+ * Plain-entry-list parser for use by ogs_pfcp_context_reload_config().
+ * Strings are copied into char[] buffers in the entry struct so that the
+ * temporary YAML document parsed during reload can be freed before the
+ * diff/add phase, without leaving dangling pointers.
+ *
+ * The cold-start parser in ogs_pfcp_context_parse_config() is intentionally
+ * unchanged — it stores YAML-doc pointers in subnet->range[].low/high (which
+ * outlive the daemon via ogs_app()->document). Runtime-added DNNs in Phase 1
+ * do not yet support range[]; this is documented and warned at parse time.
+ ******************************************************************************/
+
+typedef struct parsed_session_entry_s {
+    ogs_lnode_t lnode;
+    char ipstr[OGS_ADDRSTRLEN];
+    char mask_or_numbits[8];
+    char gateway[OGS_ADDRSTRLEN];
+    char dnn[OGS_MAX_DNN_LEN+1];
+    char ifname[OGS_MAX_IFNAME_LEN];
+    int  family;        /* AF_INET / AF_INET6, derived from ipstr */
+} parsed_session_entry_t;
+
+static int reload_parse_session_entry(
+        ogs_yaml_iter_t *subnet_iter, parsed_session_entry_t *e)
+{
+    bool has_range = false;
+    ogs_ipsubnet_t tmp_sub;
+    int rv;
+
+    ogs_assert(subnet_iter);
+    ogs_assert(e);
+
+    while (ogs_yaml_iter_next(subnet_iter)) {
+        const char *k = ogs_yaml_iter_key(subnet_iter);
+        ogs_assert(k);
+        if (!strcmp(k, "subnet")) {
+            char *v = (char *)ogs_yaml_iter_value(subnet_iter);
+            if (v) {
+                const char *ipstr_p = (const char *)strsep(&v, "/");
+                if (ipstr_p)
+                    ogs_cpystrn(e->ipstr, ipstr_p, OGS_ADDRSTRLEN);
+                if (v)
+                    ogs_cpystrn(e->mask_or_numbits, v,
+                            sizeof(e->mask_or_numbits));
+            }
+        } else if (!strcmp(k, "gateway")) {
+            const char *v = ogs_yaml_iter_value(subnet_iter);
+            if (v)
+                ogs_cpystrn(e->gateway, v, OGS_ADDRSTRLEN);
+        } else if (!strcmp(k, "apn") || !strcmp(k, "dnn")) {
+            const char *v = ogs_yaml_iter_value(subnet_iter);
+            if (v)
+                ogs_cpystrn(e->dnn, v, OGS_MAX_DNN_LEN+1);
+        } else if (!strcmp(k, "dev")) {
+            const char *v = ogs_yaml_iter_value(subnet_iter);
+            if (v)
+                ogs_cpystrn(e->ifname, v, OGS_MAX_IFNAME_LEN);
+        } else if (!strcmp(k, "range")) {
+            has_range = true;
+            /* Skip the range body — Phase 1 does not support range[]
+             * in runtime-added DNNs (see file-level comment above). */
+        } else {
+            ogs_warn("unknown key `%s` in session entry on reload", k);
+        }
+    }
+
+    if (e->ipstr[0] == 0) {
+        ogs_error("session entry on reload is missing 'subnet' key");
+        return OGS_ERROR;
+    }
+    if (e->dnn[0] == 0) {
+        ogs_error("session entry on reload is missing 'dnn' key "
+                "(subnet=%s)", e->ipstr);
+        return OGS_ERROR;
+    }
+    if (e->ifname[0] == 0) {
+        /* Default to global tun_ifname, matching cold-start behaviour. */
+        ogs_cpystrn(e->ifname, self.tun_ifname, OGS_MAX_IFNAME_LEN);
+    }
+    if (has_range) {
+        ogs_warn("DNN '%s': range[] in runtime-added DNNs is not "
+                "supported in Phase 1 of the SIGHUP reload path; "
+                "only the parent subnet will be made available. "
+                "Restart for full range support.",
+                e->dnn);
+    }
+
+    /* Derive family from ipstr for cheap drift comparisons later. */
+    rv = ogs_ipsubnet(&tmp_sub, e->ipstr, NULL);
+    if (rv != OGS_OK) {
+        ogs_error("Failed to parse subnet IP '%s' for DNN '%s' on reload",
+                e->ipstr, e->dnn);
+        return OGS_ERROR;
+    }
+    e->family = tmp_sub.family;
+
+    return OGS_OK;
+}
+
+static void reload_free_parsed_entries(ogs_list_t *list)
+{
+    parsed_session_entry_t *e = NULL, *next = NULL;
+
+    ogs_list_for_each_safe(list, next, e) {
+        ogs_list_remove(list, e);
+        ogs_free(e);
+    }
+}
+
+/* Returns 0 if existing matches entry, 1 if drift detected, -1 on parse
+ * error. Compares binary representations to avoid false positives from
+ * non-canonical IP string forms (e.g. "fd00:0:0::/64" vs "fd00::/64").
+ *
+ * entry_sub and entry_gw must be zeroed before calling ogs_ipsubnet():
+ * for IPv4, parse_ip() sets only ipsub->sub[0] and ogs_ipsubnet() sets
+ * only the relevant prefix bytes of mask. With NULL mask_or_numbits
+ * (gateway path), mask is initialised to all-1s and fix_subnet() AND-
+ * masks sub against it, leaving sub[1..3] unchanged. The cold-start
+ * subnet was memset(0) before its ogs_ipsubnet() call, so its sub[1..3]
+ * are 0; if our stack-allocated entry_sub/entry_gw have garbage there,
+ * memcmp falsely reports drift. Pre-zeroing fixes this for both paths. */
+static int reload_drift_check(
+        ogs_pfcp_subnet_t *existing, parsed_session_entry_t *entry)
+{
+    ogs_ipsubnet_t entry_sub, entry_gw;
+    int rv;
+
+    ogs_assert(existing);
+    ogs_assert(entry);
+
+    memset(&entry_sub, 0, sizeof(entry_sub));
+    memset(&entry_gw, 0, sizeof(entry_gw));
+
+    rv = ogs_ipsubnet(&entry_sub, entry->ipstr, entry->mask_or_numbits);
+    if (rv != OGS_OK)
+        return -1;
+
+    if (memcmp(&existing->sub, &entry_sub, sizeof(existing->sub)) != 0)
+        return 1;
+
+    if (entry->gateway[0]) {
+        rv = ogs_ipsubnet(&entry_gw, entry->gateway, NULL);
+        if (rv != OGS_OK)
+            return -1;
+        if (memcmp(&existing->gw, &entry_gw,
+                    sizeof(existing->gw)) != 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static yaml_document_t *reload_read_yaml_doc(void)
+{
+    FILE *file;
+    yaml_parser_t parser;
+    yaml_document_t *document = NULL;
+
+    if (!ogs_app()->file) {
+        ogs_error("ogs_app()->file is NULL; cannot reload");
+        return NULL;
+    }
+
+    file = fopen(ogs_app()->file, "rb");
+    if (!file) {
+        ogs_error("cannot reopen file `%s` for reload", ogs_app()->file);
+        return NULL;
+    }
+
+    if (!yaml_parser_initialize(&parser)) {
+        ogs_error("yaml_parser_initialize() failed during reload");
+        fclose(file);
+        return NULL;
+    }
+    yaml_parser_set_input_file(&parser, file);
+
+    document = ogs_calloc(1, sizeof(*document));
+    ogs_assert(document);
+
+    if (!yaml_parser_load(&parser, document)) {
+        ogs_error("Failed to re-parse configuration file '%s' on reload "
+                "(line %zu, col %zu): %s",
+                ogs_app()->file,
+                parser.problem_mark.line+1,
+                parser.problem_mark.column+1,
+                parser.problem ? parser.problem : "unknown");
+        ogs_free(document);
+        document = NULL;
+    }
+
+    yaml_parser_delete(&parser);
+    fclose(file);
+    return document;
+}
+
+static void reload_free_yaml_doc(yaml_document_t *doc)
+{
+    if (!doc)
+        return;
+    yaml_document_delete(doc);
+    ogs_free(doc);
+}
+
+int ogs_pfcp_context_reload_config(
+        const char *local, const char *remote,
+        ogs_list_t *added_list,
+        ogs_pfcp_reload_result_t *result)
+{
+    yaml_document_t *document;
+    ogs_yaml_iter_t root_iter;
+    int idx = 0;
+    ogs_list_t parsed;
+    parsed_session_entry_t *entry = NULL, *next_entry = NULL;
+    bool found_local = false;
+
+    ogs_assert(local);
+    ogs_assert(added_list);
+    ogs_assert(result);
+
+    memset(result, 0, sizeof(*result));
+    ogs_list_init(added_list);
+    ogs_list_init(&parsed);
+
+    document = reload_read_yaml_doc();
+    if (!document)
+        return OGS_ERROR;
+
+    /* Walk to local.session block. Mirrors the outer loop of
+     * ogs_pfcp_context_parse_config() but only descends into the
+     * session[] array; everything else (pfcp.server, peers, etc.)
+     * is intentionally not reloaded in this Phase 1 patch. */
+    ogs_yaml_iter_init(&root_iter, document);
+    while (ogs_yaml_iter_next(&root_iter)) {
+        const char *root_key = ogs_yaml_iter_key(&root_iter);
+        ogs_yaml_iter_t local_iter;
+        if (!root_key) continue;
+        if (strcmp(root_key, local) != 0) continue;
+        if (idx++ != ogs_app()->config_section_id) continue;
+
+        found_local = true;
+        ogs_yaml_iter_recurse(&root_iter, &local_iter);
+        while (ogs_yaml_iter_next(&local_iter)) {
+            const char *local_key = ogs_yaml_iter_key(&local_iter);
+            ogs_yaml_iter_t subnet_array, subnet_iter;
+            if (!local_key) continue;
+            if (strcmp(local_key, "session") != 0) continue;
+
+            ogs_yaml_iter_recurse(&local_iter, &subnet_array);
+            do {
+                if (ogs_yaml_iter_type(&subnet_array) ==
+                        YAML_MAPPING_NODE) {
+                    memcpy(&subnet_iter, &subnet_array,
+                            sizeof(ogs_yaml_iter_t));
+                } else if (ogs_yaml_iter_type(&subnet_array) ==
+                        YAML_SEQUENCE_NODE) {
+                    if (!ogs_yaml_iter_next(&subnet_array))
+                        break;
+                    ogs_yaml_iter_recurse(&subnet_array, &subnet_iter);
+                } else {
+                    break;
+                }
+
+                entry = ogs_calloc(1, sizeof(*entry));
+                ogs_assert(entry);
+
+                if (reload_parse_session_entry(&subnet_iter,
+                            entry) == OGS_OK) {
+                    ogs_list_add(&parsed, entry);
+                } else {
+                    ogs_free(entry);
+                    result->errors++;
+                }
+            } while (ogs_yaml_iter_type(&subnet_array) ==
+                    YAML_SEQUENCE_NODE);
+        }
+    }
+
+    /* Free the temp YAML doc — all strings are now copied into
+     * the parsed_session_entry_t buffers. */
+    reload_free_yaml_doc(document);
+
+    if (!found_local) {
+        ogs_error("Configuration section '%s' not found on reload", local);
+        reload_free_parsed_entries(&parsed);
+        return OGS_ERROR;
+    }
+
+    /* Diff against self.subnet_list — add-only, drift detection. */
+    ogs_list_for_each_safe(&parsed, next_entry, entry) {
+        ogs_pfcp_subnet_t *existing =
+            ogs_pfcp_find_subnet_by_dnn(entry->family, entry->dnn);
+        ogs_pfcp_subnet_t *subnet;
+        int drift;
+
+        if (existing) {
+            drift = reload_drift_check(existing, entry);
+            if (drift > 0) {
+                ogs_warn("DNN '%s' subnet/gateway drift detected in "
+                        "configuration; live configuration retained, "
+                        "restart required to honor change",
+                        entry->dnn);
+                result->drift++;
+            } else if (drift < 0) {
+                ogs_error("DNN '%s' has invalid subnet/gateway in "
+                        "configuration on reload", entry->dnn);
+                result->errors++;
+            } else {
+                result->unchanged++;
+            }
+            continue;
+        }
+
+        /* Genuinely new DNN — allocate one subnet from the pool. */
+        subnet = ogs_pfcp_subnet_add(
+                entry->ipstr, entry->mask_or_numbits,
+                entry->gateway[0] ? entry->gateway : NULL,
+                entry->dnn, entry->ifname);
+        if (!subnet) {
+            /* ogs_pfcp_subnet_pool exhausted, or other alloc failure.
+             * Skip this entry; do not abort the whole reload — other
+             * new DNNs in the list may still succeed. */
+            ogs_error("Failed to add DNN '%s': "
+                    "ogs_pfcp_subnet_pool may be exhausted "
+                    "(compile-time max=%d). Increase "
+                    "OGS_MAX_NUM_OF_SUBNET if you regularly run "
+                    "more DNNs.",
+                    entry->dnn, OGS_MAX_NUM_OF_SUBNET);
+            result->errors++;
+            continue;
+        }
+
+        ogs_list_add(added_list, subnet);
+        result->added++;
+    }
+
+    reload_free_parsed_entries(&parsed);
+
+    /* 'remote' is currently unused on the reload path; it is accepted
+     * to keep the API symmetric with ogs_pfcp_context_parse_config(). */
+    (void) remote;
+
+    return OGS_OK;
 }

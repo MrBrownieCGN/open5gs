@@ -3446,3 +3446,93 @@ int smf_maximum_integrity_protected_data_rate_downlink_value2enum(
     ogs_assert(value);
     return smf_maximum_integrity_protected_data_rate_uplink_value2enum(value);
 }
+
+/******************************************************************************
+ * Runtime DNN reload helpers (SIGHUP-driven, see project_open5gs_runtime_dnn_reload)
+ *
+ * Append newly-added DNNs to the SMF NF profile's slice[].dnn[] list so
+ * that the next NRF NF profile update advertises them and AMFs can
+ * discover this SMF for the new DNNs.
+ *
+ * Phase 1: appends to slice[0] only. Multi-slice deployments where a
+ * runtime-added DNN belongs to a non-slice[0] slice still need a daemon
+ * restart (logged as a warning here so the operator notices).
+ ******************************************************************************/
+int smf_context_reload_info_dnn_mapping(ogs_list_t *added_list)
+{
+    ogs_sbi_nf_instance_t *nf_instance;
+    ogs_sbi_nf_info_t *nf_info = NULL;
+    ogs_sbi_smf_info_t *smf_info = NULL;
+    ogs_pfcp_subnet_t *subnet = NULL;
+    int appended = 0;
+
+    ogs_assert(added_list);
+
+    nf_instance = ogs_sbi_self()->nf_instance;
+    if (!nf_instance) {
+        ogs_warn("SMF not yet registered with NRF; "
+                "slice[].dnn[] mapping update deferred to "
+                "initial NRF registration");
+        return OGS_OK;
+    }
+
+    /* Find the SMF nf_info entry. There is normally exactly one per
+     * nf_instance for an SMF binary. */
+    ogs_list_for_each(&nf_instance->nf_info_list, nf_info) {
+        if (nf_info->nf_type != OpenAPI_nf_type_SMF) continue;
+
+        smf_info = &nf_info->smf;
+
+        if (smf_info->num_of_slice == 0) {
+            ogs_warn("SMF nf_info has no slices; cannot append "
+                    "runtime-added DNNs (operator must restart for "
+                    "slice configuration changes)");
+            continue;
+        }
+
+        if (smf_info->num_of_slice > 1) {
+            ogs_warn("SMF nf_info has %d slices; Phase 1 of the "
+                    "SIGHUP-driven DNN reload appends new DNNs to "
+                    "slice[0] only. If a runtime-added DNN should "
+                    "belong to a different slice, restart for full "
+                    "slice-aware reload (Phase 2).",
+                    smf_info->num_of_slice);
+        }
+
+        ogs_list_for_each(added_list, subnet) {
+            int i;
+            bool already_present = false;
+
+            /* Skip if this DNN is already present in slice[0]. */
+            for (i = 0; i < smf_info->slice[0].num_of_dnn; i++) {
+                if (smf_info->slice[0].dnn[i] &&
+                    ogs_strcasecmp(smf_info->slice[0].dnn[i],
+                            subnet->dnn) == 0) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (already_present) continue;
+
+            if (smf_info->slice[0].num_of_dnn >= OGS_MAX_NUM_OF_DNN) {
+                ogs_error("Cannot append DNN '%s' to nf_info: "
+                        "slice[0].dnn[] full (max=%d). Increase "
+                        "OGS_MAX_NUM_OF_DNN if you regularly run "
+                        "more DNNs.",
+                        subnet->dnn, OGS_MAX_NUM_OF_DNN);
+                continue;
+            }
+
+            smf_info->slice[0].dnn[smf_info->slice[0].num_of_dnn] =
+                    ogs_strdup(subnet->dnn);
+            ogs_assert(smf_info->slice[0]
+                    .dnn[smf_info->slice[0].num_of_dnn]);
+            smf_info->slice[0].num_of_dnn++;
+            appended++;
+        }
+    }
+
+    ogs_info("SMF nf_info updated: %d DNN(s) appended to slice[0]",
+            appended);
+    return OGS_OK;
+}

@@ -66,6 +66,8 @@ const char *smf_event_get_name(smf_event_t *e)
         return OGS_EVENT_NAME_SBI_CLIENT;
     case OGS_EVENT_SBI_TIMER:
         return OGS_EVENT_NAME_SBI_TIMER;
+    case OGS_EVENT_APP_RELOAD:
+        return OGS_EVENT_NAME_APP_RELOAD;
 
     case SMF_EVT_NGAP_MESSAGE:
         return "SMF_EVT_NGAP_MESSAGE";

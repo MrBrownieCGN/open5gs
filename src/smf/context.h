@@ -719,6 +719,17 @@ smf_context_t *smf_self(void);
 
 int smf_context_parse_config(void);
 
+/* Append runtime-added DNNs to the SMF NF profile's slice[].dnn[] list
+ * so that the next NRF NF profile update advertises them and AMFs can
+ * discover this SMF for the new DNNs.
+ *
+ * Phase 1: appends to slice[0] only — sufficient for the common single-
+ * slice deployment. Multi-slice deployments where a runtime-added DNN
+ * belongs to a slice other than slice[0] still require a daemon restart;
+ * a follow-up RFC will introduce slice-aware mapping by re-parsing the
+ * smf.info[].s_nssai[].dnn[] block. */
+int smf_context_reload_info_dnn_mapping(ogs_list_t *added_list);
+
 int smf_use_gy_iface(void);
 
 smf_gtp_node_t *smf_gtp_node_new(ogs_gtp_node_t *gnode);

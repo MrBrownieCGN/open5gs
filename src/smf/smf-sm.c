@@ -1440,6 +1440,13 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
         ogs_fsm_dispatch(&sess->sm, e);
         break;
 
+    case OGS_EVENT_APP_RELOAD:
+        ogs_info("Configuration reload requested via SIGHUP");
+        if (smf_reload() != OGS_OK)
+            ogs_error("SMF configuration reload failed; "
+                    "running configuration retained");
+        break;
+
     default:
         ogs_error("No handler for event %s", smf_event_get_name(e));
         break;

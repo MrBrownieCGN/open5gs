@@ -101,6 +101,105 @@ int smf_initialize(void)
     return OGS_OK;
 }
 
+/******************************************************************************
+ * smf_reload()
+ *
+ * Apply runtime DNN/APN additions from the YAML configuration without
+ * tearing down active sessions. Called from the main-loop FSM dispatcher
+ * (smf_state_operational, OGS_EVENT_APP_RELOAD) — never directly from
+ * the signal-thread; the signal-thread only enqueues the event via
+ * app_reload() in src/smf/app.c.
+ *
+ * Add-only on the subnet side, with mandatory NF-profile update so the
+ * AMF discovers the new DNN list immediately (without waiting for the
+ * next periodic NRF heartbeat).
+ *
+ * Per-subnet rollback on UE pool generation failure mirrors the UPF path.
+ ******************************************************************************/
+int smf_reload(void)
+{
+    int rv;
+    ogs_pfcp_reload_result_t result;
+    ogs_list_t added;
+    ogs_pfcp_subnet_t *subnet = NULL, *next = NULL;
+
+    ogs_list_init(&added);
+    memset(&result, 0, sizeof(result));
+
+    rv = ogs_pfcp_context_reload_config(
+            "smf", "upf", &added, &result);
+    if (rv != OGS_OK) {
+        ogs_error("SMF reload aborted: parse failure (%d)", rv);
+        return rv;
+    }
+
+    if (result.added == 0) {
+        ogs_info("SMF reload: no new DNNs "
+                "(unchanged=%d, drift=%d, errors=%d)",
+                result.unchanged, result.drift, result.errors);
+        return OGS_OK;
+    }
+
+    /* Generate the UE pool for each newly-added subnet. Per-subnet
+     * rollback to keep partial-success behaviour consistent with UPF. */
+    ogs_list_for_each_safe(&added, next, subnet) {
+        rv = ogs_pfcp_ue_pool_generate_for_subnet(subnet);
+        if (rv != OGS_OK) {
+            ogs_error("Failed to generate UE pool for DNN '%s'; "
+                    "rolling back this subnet only "
+                    "(other DNNs unaffected)", subnet->dnn);
+            ogs_list_remove(&added, subnet);
+            ogs_pfcp_subnet_remove(subnet);
+            result.errors++;
+            result.added--;
+        } else {
+            ogs_info("DNN '%s' added at runtime (SMF side)",
+                    subnet->dnn);
+        }
+    }
+
+    /* Append the new DNNs to slice[0].dnn[] in the SMF NF profile so
+     * that the NRF update below advertises them to AMFs. */
+    rv = smf_context_reload_info_dnn_mapping(&added);
+    if (rv != OGS_OK) {
+        ogs_error("Failed to refresh slice→DNN mapping in SMF nf_info; "
+                "subnets added but AMF discovery may be stale until "
+                "restart");
+    }
+
+    /* Trigger an NRF NF-profile update so the AMF discovers this SMF
+     * for the new DNNs immediately. Guard with OGS_FSM_CHECK because
+     * SIGHUP can arrive in any NF state — including during initial
+     * registration (FSM in will_register) or after an SBI link-down
+     * (FSM in de_registered). The guard mirrors the heartbeat handler
+     * pattern in lib/sbi/nf-sm.c (which uses the same OGS_FSM_CHECK
+     * before dispatching profile updates). */
+    {
+        ogs_sbi_nf_instance_t *nf_instance =
+            ogs_sbi_self() ? ogs_sbi_self()->nf_instance : NULL;
+
+        if (nf_instance &&
+            OGS_FSM_CHECK(&nf_instance->sm, ogs_sbi_nf_state_registered)) {
+            if (ogs_nnrf_nfm_send_nf_update(nf_instance) == true) {
+                ogs_info("NRF NF profile update sent with new DNN list");
+            } else {
+                ogs_error("NRF NF profile update failed after reload; "
+                        "AMF may not discover this SMF for new DNNs "
+                        "until next heartbeat (non-fatal — heartbeat "
+                        "will resync within ~30s)");
+            }
+        } else {
+            ogs_info("SMF not currently registered with NRF; new DNNs "
+                    "will be published on the next NRF registration");
+        }
+    }
+
+    ogs_info("SMF reload complete: "
+            "added=%d, unchanged=%d, drift=%d, errors=%d",
+            result.added, result.unchanged, result.drift, result.errors);
+    return result.errors ? OGS_ERROR : OGS_OK;
+}
+
 static ogs_timer_t *t_termination_holding = NULL;
 
 static void event_termination(void)

@@ -102,7 +102,10 @@ const char *upf_event_get_name(upf_event_t *e)
     case UPF_EVT_N4_NO_HEARTBEAT:
         return "UPF_EVT_N4_NO_HEARTBEAT";
 
-    default: 
+    case OGS_EVENT_APP_RELOAD:
+        return OGS_EVENT_NAME_APP_RELOAD;
+
+    default:
        break;
     }
 

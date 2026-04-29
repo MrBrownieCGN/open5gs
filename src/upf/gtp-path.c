@@ -943,6 +943,50 @@ static void _get_dev_mac_addr(char *ifname, uint8_t *mac_addr)
 #endif
 }
 
+int upf_gtp_open_dev_if_new(ogs_pfcp_dev_t *dev)
+{
+    ogs_assert(dev);
+
+    /* If the device's FD is already valid, it was opened either at
+     * cold-start or during an earlier reload — nothing to do. */
+    if (dev->fd != 0 && dev->fd != INVALID_SOCKET)
+        return OGS_OK;
+
+    dev->is_tap = strstr(dev->ifname, "tap");
+    dev->fd = ogs_tun_open(dev->ifname, OGS_MAX_IFNAME_LEN, dev->is_tap);
+    if (dev->fd == INVALID_SOCKET) {
+        ogs_error("tun_open(dev:%s) failed", dev->ifname);
+        return OGS_ERROR;
+    }
+
+    if (dev->is_tap) {
+        _get_dev_mac_addr(dev->ifname, dev->mac_addr);
+        dev->poll = ogs_pollset_add(ogs_app()->pollset,
+                OGS_POLLIN, dev->fd, _gtpv1_tun_recv_eth_cb, NULL);
+    } else {
+        dev->poll = ogs_pollset_add(ogs_app()->pollset,
+                OGS_POLLIN, dev->fd, _gtpv1_tun_recv_cb, NULL);
+    }
+    ogs_assert(dev->poll);
+
+    return OGS_OK;
+}
+
+int upf_gtp_set_subnet_ip(ogs_pfcp_subnet_t *subnet)
+{
+    int rc;
+
+    ogs_assert(subnet);
+    ogs_assert(subnet->dev);
+
+    rc = ogs_tun_set_ip(subnet->dev->ifname, &subnet->gw, &subnet->sub);
+    if (rc != OGS_OK) {
+        ogs_error("ogs_tun_set_ip(dev:%s) failed", subnet->dev->ifname);
+        return OGS_ERROR;
+    }
+    return OGS_OK;
+}
+
 int upf_gtp_open(void)
 {
     ogs_pfcp_dev_t *dev = NULL;
@@ -980,25 +1024,9 @@ int upf_gtp_open(void)
 
     /* Open Tun interface */
     ogs_list_for_each(&ogs_pfcp_self()->dev_list, dev) {
-        dev->is_tap = strstr(dev->ifname, "tap");
-        dev->fd = ogs_tun_open(dev->ifname, OGS_MAX_IFNAME_LEN, dev->is_tap);
-        if (dev->fd == INVALID_SOCKET) {
-            ogs_error("tun_open(dev:%s) failed", dev->ifname);
+        rc = upf_gtp_open_dev_if_new(dev);
+        if (rc != OGS_OK)
             return OGS_ERROR;
-        }
-
-        if (dev->is_tap) {
-            _get_dev_mac_addr(dev->ifname, dev->mac_addr);
-            dev->poll = ogs_pollset_add(ogs_app()->pollset,
-                    OGS_POLLIN, dev->fd, _gtpv1_tun_recv_eth_cb, NULL);
-            ogs_assert(dev->poll);
-        } else {
-            dev->poll = ogs_pollset_add(ogs_app()->pollset,
-                    OGS_POLLIN, dev->fd, _gtpv1_tun_recv_cb, NULL);
-            ogs_assert(dev->poll);
-        }
-
-        ogs_assert(dev->poll);
     }
 
     /*
@@ -1013,12 +1041,9 @@ int upf_gtp_open(void)
     /* Set P-to-P IP address with Netmask
      * Note that Linux will skip this configuration */
     ogs_list_for_each(&ogs_pfcp_self()->subnet_list, subnet) {
-        ogs_assert(subnet->dev);
-        rc = ogs_tun_set_ip(subnet->dev->ifname, &subnet->gw, &subnet->sub);
-        if (rc != OGS_OK) {
-            ogs_error("ogs_tun_set_ip(dev:%s) failed", subnet->dev->ifname);
+        rc = upf_gtp_set_subnet_ip(subnet);
+        if (rc != OGS_OK)
             return OGS_ERROR;
-        }
     }
 
     return OGS_OK;

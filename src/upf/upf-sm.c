@@ -93,6 +93,14 @@ void upf_state_operational(ogs_fsm_t *s, upf_event_t *e)
 
         ogs_fsm_dispatch(&node->sm, e);
         break;
+
+    case OGS_EVENT_APP_RELOAD:
+        ogs_info("Configuration reload requested via SIGHUP");
+        if (upf_reload() != OGS_OK)
+            ogs_error("UPF configuration reload failed; "
+                    "running configuration retained");
+        break;
+
     default:
         ogs_error("No handler for event %s", upf_event_get_name(e));
         break;

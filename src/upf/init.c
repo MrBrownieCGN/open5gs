@@ -82,6 +82,91 @@ int upf_initialize(void)
     return OGS_OK;
 }
 
+/******************************************************************************
+ * upf_reload()
+ *
+ * Apply runtime DNN/APN additions from the YAML configuration without
+ * tearing down active sessions. Called from the main-loop FSM dispatcher
+ * (upf_state_operational, OGS_EVENT_APP_RELOAD) — never directly from
+ * the signal-thread; the signal-thread only enqueues the event via
+ * app_reload() in src/upf/app.c.
+ *
+ * Add-only: existing DNNs are not mutated. Drift on existing DNNs is
+ * detected by ogs_pfcp_context_reload_config() and warned but not
+ * honored (live ue_ip->subnet pointers must not be invalidated).
+ *
+ * Per-subnet rollback: if a newly-added DNN fails any apply step, only
+ * that subnet is removed via ogs_pfcp_subnet_remove(). Other newly-added
+ * DNNs and all existing DNNs remain unaffected. ogs_list_for_each_safe
+ * is mandatory because the loop body may free `subnet`.
+ *
+ * Known Phase-1 limitation: if a runtime-added DNN brought a brand-new
+ * ifname (e.g. ogstun2) and the dev was opened successfully but the
+ * subsequent set_subnet_ip() or pool_generate fails, the new
+ * ogs_pfcp_dev_t is left in self.dev_list with the underlying TUN
+ * interface open. Most deployments share `ogstun` for all DNNs so this
+ * path is rare. Phase 2 introduces dev refcounting to close cleanly.
+ ******************************************************************************/
+int upf_reload(void)
+{
+    int rv;
+    ogs_pfcp_reload_result_t result;
+    ogs_list_t added;
+    ogs_pfcp_subnet_t *subnet = NULL, *next = NULL;
+
+    ogs_list_init(&added);
+    memset(&result, 0, sizeof(result));
+
+    rv = ogs_pfcp_context_reload_config(
+            "upf", "smf", &added, &result);
+    if (rv != OGS_OK) {
+        ogs_error("UPF reload aborted: parse failure (%d)", rv);
+        return rv;
+    }
+
+    if (result.added == 0) {
+        ogs_info("UPF reload: no new DNNs "
+                "(unchanged=%d, drift=%d, errors=%d)",
+                result.unchanged, result.drift, result.errors);
+        return OGS_OK;
+    }
+
+    ogs_list_for_each_safe(&added, next, subnet) {
+        rv = upf_gtp_open_dev_if_new(subnet->dev);
+        if (rv != OGS_OK) goto rollback_one;
+
+        rv = upf_gtp_set_subnet_ip(subnet);
+        if (rv != OGS_OK) goto rollback_one;
+
+        rv = ogs_pfcp_ue_pool_generate_for_subnet(subnet);
+        if (rv != OGS_OK) goto rollback_one;
+
+        ogs_info("DNN '%s' added at runtime "
+                "(NOTE: on Linux, external OS routing for the new "
+                "UE pool must be configured separately — "
+                "ogs_tun_set_ip() is a no-op on Linux)",
+                subnet->dnn);
+        continue;
+
+rollback_one:
+        ogs_error("Failed to apply runtime-added DNN '%s'; "
+                "rolling back this subnet only "
+                "(other DNNs and active sessions unaffected)",
+                subnet->dnn);
+        /* De-link from added before subnet_remove() frees it,
+         * to avoid any list-traversal use-after-free. */
+        ogs_list_remove(&added, subnet);
+        ogs_pfcp_subnet_remove(subnet);
+        result.errors++;
+        result.added--;
+    }
+
+    ogs_info("UPF reload complete: "
+            "added=%d, unchanged=%d, drift=%d, errors=%d",
+            result.added, result.unchanged, result.drift, result.errors);
+    return result.errors ? OGS_ERROR : OGS_OK;
+}
+
 void upf_terminate(void)
 {
     if (!initialized) return;

@@ -33,6 +33,17 @@ void upf_gtp_final(void);
 int upf_gtp_open(void);
 void upf_gtp_close(void);
 
+/* Open the TUN device for `dev` if it has not been opened yet.
+ * Returns OGS_OK in both the "already open" and "successfully opened
+ * now" cases. Used by the runtime DNN reload path to attach a new
+ * device without disturbing devices opened at cold-start. */
+int upf_gtp_open_dev_if_new(ogs_pfcp_dev_t *dev);
+
+/* Configure the IP address on the TUN device for `subnet`. Wraps
+ * ogs_tun_set_ip() — on Linux this is a no-op (the address/route is
+ * managed externally by the operator's network configuration). */
+int upf_gtp_set_subnet_ip(ogs_pfcp_subnet_t *subnet);
+
 #ifdef __cplusplus
 }
 #endif

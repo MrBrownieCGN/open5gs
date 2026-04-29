@@ -18,6 +18,7 @@
  */
 
 #include "ogs-app.h"
+#include "event.h"
 
 int app_initialize(const char *const argv[])
 {
@@ -41,7 +42,26 @@ void app_terminate(void)
 
 int app_reload(void)
 {
-    ogs_warn("Configuration reload not supported by this NF; "
-            "ignoring SIGHUP-driven reload");
+    upf_event_t *e;
+    int rv;
+
+    /* Runs in the signal-thread. Do not touch UPF/PFCP state here —
+     * enqueue an OGS_EVENT_APP_RELOAD event and let the main-loop
+     * FSM dispatcher (single-writer of self.subnet_list, dev_list,
+     * and TUN devices) perform the reload safely. */
+    e = upf_event_new((upf_event_e)OGS_EVENT_APP_RELOAD);
+    if (!e) {
+        ogs_error("upf_event_new(OGS_EVENT_APP_RELOAD) failed");
+        return OGS_ERROR;
+    }
+
+    rv = ogs_queue_push(ogs_app()->queue, e);
+    if (rv != OGS_OK) {
+        ogs_error("ogs_queue_push() failed for reload event: rv=%d", rv);
+        upf_event_free(e);
+        return rv;
+    }
+    ogs_pollset_notify(ogs_app()->pollset);
+
     return OGS_OK;
 }

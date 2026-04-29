@@ -107,9 +107,11 @@ void bsf_terminate(void);
 
 int upf_initialize(void);
 void upf_terminate(void);
+int upf_reload(void);
 
 int smf_initialize(void);
 void smf_terminate(void);
+int smf_reload(void);
 
 int amf_initialize(void);
 void amf_terminate(void);

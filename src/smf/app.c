@@ -38,3 +38,10 @@ void app_terminate(void)
     smf_terminate();
     ogs_info("SMF terminate...done");
 }
+
+int app_reload(void)
+{
+    ogs_warn("Configuration reload not supported by this NF; "
+            "ignoring SIGHUP-driven reload");
+    return OGS_OK;
+}

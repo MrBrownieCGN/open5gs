@@ -22,6 +22,7 @@
 const char *OGS_EVENT_NAME_SBI_SERVER = "OGS_EVENT_NAME_SBI_SERVER";
 const char *OGS_EVENT_NAME_SBI_CLIENT = "OGS_EVENT_NAME_SBI_CLIENT";
 const char *OGS_EVENT_NAME_SBI_TIMER = "OGS_EVENT_NAME_SBI_TIMER";
+const char *OGS_EVENT_NAME_APP_RELOAD = "OGS_EVENT_NAME_APP_RELOAD";
 
 void *ogs_event_size(int id, size_t size)
 {
@@ -64,6 +65,8 @@ const char *ogs_event_get_name(ogs_event_t *e)
         return OGS_EVENT_NAME_SBI_CLIENT;
     case OGS_EVENT_SBI_TIMER:
         return OGS_EVENT_NAME_SBI_TIMER;
+    case OGS_EVENT_APP_RELOAD:
+        return OGS_EVENT_NAME_APP_RELOAD;
 
     default:
         break;

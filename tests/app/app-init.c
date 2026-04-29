@@ -154,3 +154,9 @@ void test_app_final(void)
 
     test_context_final();
 }
+
+int app_reload(void)
+{
+    /* Test apps do not implement runtime configuration reload. */
+    return OGS_OK;
+}

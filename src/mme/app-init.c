@@ -42,3 +42,10 @@ void app_terminate(void)
     ogs_info("MME terminate...done");
 }
 
+
+int app_reload(void)
+{
+    ogs_warn("Configuration reload not supported by this NF; "
+            "ignoring SIGHUP-driven reload");
+    return OGS_OK;
+}

@@ -43,6 +43,26 @@ extern "C" {
 int app_initialize(const char *const argv[]);
 void app_terminate(void);
 
+/*
+ * SIGHUP-driven runtime configuration reload hook.
+ *
+ * Each NF provides its own implementation in src/<nf>/app.c (or
+ * src/<nf>/app-init.c). NFs that do not yet support runtime reload
+ * provide a stub that logs a warning and returns OGS_OK.
+ *
+ * Invoked from the main loop's signal handler after ogs_log_cycle().
+ * The NF implementation should not perform state mutation in the
+ * signal-thread context — instead, it enqueues an
+ * OGS_EVENT_APP_RELOAD event onto ogs_app()->queue and returns,
+ * so that the main-loop FSM dispatcher (single-threaded owner of
+ * the NF state) performs the reload safely.
+ *
+ * Return: OGS_OK on success (event enqueued or reload completed),
+ *         OGS_ERROR on failure. Failure does not terminate the
+ *         daemon; the running configuration remains authoritative.
+ */
+int app_reload(void);
+
 int mme_initialize(void);
 void mme_terminate(void);
 

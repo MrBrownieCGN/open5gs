@@ -38,3 +38,10 @@ void app_terminate(void)
     sgwu_terminate();
     ogs_info("SGW-U terminate...done");
 }
+
+int app_reload(void)
+{
+    ogs_warn("Configuration reload not supported by this NF; "
+            "ignoring SIGHUP-driven reload");
+    return OGS_OK;
+}

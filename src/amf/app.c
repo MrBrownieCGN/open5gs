@@ -41,3 +41,10 @@ void app_terminate(void)
     ogs_sctp_final();
     ogs_info("AMF terminate...done");
 }
+
+int app_reload(void)
+{
+    ogs_warn("Configuration reload not supported by this NF; "
+            "ignoring SIGHUP-driven reload");
+    return OGS_OK;
+}

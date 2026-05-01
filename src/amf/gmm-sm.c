@@ -2521,12 +2521,30 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
 
     switch (e->h.id) {
     case OGS_FSM_ENTRY_SIG:
+        /*
+         * TS 33.501 §6.9.5.1 Rule 2 — refuse to initiate a NAS
+         * Security Mode Command while an N2 procedure carrying a
+         * new NH/NCC is still in flight for this UE. Sending SMC
+         * concurrently would activate a fresh KAMF in the AMF/UE
+         * while the target gNB still holds key material derived
+         * from the old KAMF, producing a KgNB mismatch.
+         */
+        if (amf_ue->n2_keychange_ongoing) {
+            ogs_warn("[%s] Refusing NAS Security Mode Command: "
+                    "N2 keychange procedure (HandoverRequest) is in "
+                    "flight for this UE (TS 33.501 §6.9.5.1 Rule 2)",
+                    amf_ue->supi);
+            OGS_FSM_TRAN(s, &gmm_state_exception);
+            break;
+        }
+        amf_ue->smc_ongoing = true;
         CLEAR_AMF_UE_TIMER(amf_ue->t3560);
         r = nas_5gs_send_security_mode_command(amf_ue);
         ogs_expect(r == OGS_OK);
         ogs_assert(r != OGS_ERROR);
         break;
     case OGS_FSM_EXIT_SIG:
+        amf_ue->smc_ongoing = false;
         break;
     case AMF_EVENT_5GMM_MESSAGE:
         nas_message = e->nas.message;

@@ -599,6 +599,15 @@ int ngap_send_handover_request(amf_ue_t *amf_ue)
         return OGS_ERROR;
     }
 
+    /*
+     * TS 33.501 §6.9.5.1 — mark this UE as having an N2 procedure
+     * with new NH/NCC in flight, until HandoverRequestAcknowledge
+     * (success) or HandoverFailure (failure) clears it. While set,
+     * gmm_state_security_mode's ENTRY refuses to initiate a NAS
+     * Security Mode Command for this UE (Rule 2).
+     */
+    amf_ue->n2_keychange_ongoing = true;
+
     rv = ngap_send_to_ran_ue(target_ue, ngapbuf);
     ogs_expect(rv == OGS_OK);
 

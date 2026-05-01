@@ -1422,6 +1422,33 @@ void ran_ue_remove(ran_ue_t *ran_ue)
 
     ogs_assert(ran_ue);
 
+    /*
+     * TS 33.501 §6.9.5.1 — if this ran_ue is the target side of an
+     * N2 handover procedure (source_ue_id is set), clear the
+     * n2_keychange_ongoing flag on the associated amf_ue. Without
+     * this cleanup, a target gNB that never replies to a
+     * HandoverRequest (blackhole / asymmetric routing failure)
+     * would leave the flag stuck at true even after the
+     * t_ng_holding timer expires and removes this ran_ue, which
+     * would permanently block any future NAS Security Mode Command
+     * for the affected UE until detach. The dedicated cleanup paths
+     * (HandoverRequestAcknowledge / HandoverFailure / HandoverCancel)
+     * still clear the flag earlier in their happy paths; this guard
+     * is the safety net for the no-response case.
+     */
+    if (ran_ue->source_ue_id >= OGS_MIN_POOL_ID &&
+            ran_ue->source_ue_id <= OGS_MAX_POOL_ID) {
+        amf_ue_t *amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
+        if (amf_ue && amf_ue->n2_keychange_ongoing) {
+            ogs_warn("[%s] N2 keychange in flight for target ran_ue "
+                    "[RAN_UE_NGAP_ID:%lld] — clearing flag at "
+                    "ran_ue_remove (likely target gNB blackhole)",
+                    amf_ue->supi,
+                    (long long)ran_ue->ran_ue_ngap_id);
+            amf_ue->n2_keychange_ongoing = false;
+        }
+    }
+
     gnb = amf_gnb_find_by_id(ran_ue->gnb_id);
 
     if (gnb) ogs_list_remove(&gnb->ran_ue_list, ran_ue);

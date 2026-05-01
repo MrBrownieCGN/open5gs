@@ -3449,6 +3449,33 @@ void ngap_handle_handover_required(
         return;
     }
 
+    /*
+     * TS 33.501 §6.9.5.1 Rule 1 — refuse to initiate an N2 procedure
+     * that introduces a new key (HandoverRequest carries NH/NCC)
+     * while a NAS Security Mode Command is in flight for this UE.
+     * Issuing both concurrently would result in the target gNB
+     * receiving NH/NCC derived from the old KAMF while the UE
+     * activates the new KAMF, producing a KgNB mismatch.
+     *
+     * The source gNB is told via HandoverPreparationFailure with
+     * cause radioNetwork:interaction-with-other-procedure (TS 38.413
+     * §9.3.1.2 NGAP_CauseRadioNetwork value 25) — the spec-defined
+     * cause for race conditions between concurrent procedures.
+     */
+    if (amf_ue->smc_ongoing) {
+        NGAP_Cause_t cause;
+        ogs_warn("[%s] Refusing N2 handover preparation: NAS Security "
+                "Mode Command is in flight for this UE "
+                "(TS 33.501 §6.9.5.1 Rule 1)", amf_ue->supi);
+        cause.present = NGAP_Cause_PR_radioNetwork;
+        cause.choice.radioNetwork =
+            NGAP_CauseRadioNetwork_interaction_with_other_procedure;
+        r = ngap_send_handover_preparation_failure(source_ue, &cause);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+
     target_ue = ran_ue_find_by_id(source_ue->target_ue_id);
     if (target_ue) {
     /*
@@ -3754,6 +3781,12 @@ void ngap_handle_handover_request_ack(
         return;
     }
 
+    /* TS 33.501 §6.9.5.1 — N2 keychange procedure has reached an
+     * acknowledged outcome at the target gNB. Clear the in-flight
+     * flag so the AMF can again initiate NAS Security Mode Command
+     * for this UE if needed. */
+    amf_ue->n2_keychange_ongoing = false;
+
     ogs_debug("    Source : RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld] ",
         (long long)source_ue->ran_ue_ngap_id,
         (long long)source_ue->amf_ue_ngap_id);
@@ -3959,6 +3992,18 @@ void ngap_handle_handover_failure(
         return;
     }
 
+    /* TS 33.501 §6.9.5.1 — N2 keychange procedure has reached a
+     * (failure) outcome at the target gNB. Clear the in-flight flag
+     * so the AMF can again initiate NAS Security Mode Command for
+     * this UE if needed. The amf_ue is reached via the source UE's
+     * NAS context; if the source UE has been removed already, the
+     * flag is moot anyway because the amf_ue is gone too. */
+    {
+        amf_ue_t *_amf_ue = amf_ue_find_by_id(source_ue->amf_ue_id);
+        if (_amf_ue)
+            _amf_ue->n2_keychange_ongoing = false;
+    }
+
     ogs_debug("    Source : RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld] ",
         (long long)source_ue->ran_ue_ngap_id,
         (long long)source_ue->amf_ue_ngap_id);
@@ -4105,6 +4150,16 @@ void ngap_handle_handover_cancel(
         ogs_assert(r != OGS_ERROR);
         return;
     }
+
+    /* TS 33.501 §6.9.5.1 — N2 keychange procedure has been cancelled
+     * by the source gNB before the target acknowledged. Clear the
+     * in-flight flag so the AMF can again initiate NAS Security Mode
+     * Command for this UE if needed. Without this, an unfortunate
+     * interaction (HandoverRequired -> HandoverRequest in flight ->
+     * source gNB sends HandoverCancel -> no Ack/Failure ever arrives
+     * from target) would leave n2_keychange_ongoing stuck at true,
+     * permanently blocking SMC for this UE until detach. */
+    amf_ue->n2_keychange_ongoing = false;
 
     ogs_debug("    Source : RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld] ",
         (long long)source_ue->ran_ue_ngap_id,

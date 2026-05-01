@@ -625,6 +625,28 @@ struct amf_ue_s {
         long cause;
     } handover;
 
+    /*
+     * TS 33.501 §6.9.5.1 — concurrent security procedure tracking.
+     *
+     * To prevent KAMF generation mismatches between the UE, source
+     * gNB, target gNB and AMF, the spec mandates that NAS Security
+     * Mode Command (which activates a new KAMF) and N2 procedures
+     * carrying a fresh NH/NCC (HandoverRequest) must not be in flight
+     * for the same UE simultaneously.
+     *
+     *   smc_ongoing          — set on entry to gmm_state_security_mode,
+     *                          cleared on exit; gates inbound N2
+     *                          procedures (Rule 1).
+     *
+     *   n2_keychange_ongoing — set just before a HandoverRequest with
+     *                          NH/NCC goes out, cleared on
+     *                          HandoverRequestAcknowledge or
+     *                          HandoverFailure; gates SMC
+     *                          initiation (Rule 2).
+     */
+    bool smc_ongoing;
+    bool n2_keychange_ongoing;
+
     /* SubscriptionId of Subscription to Data Change Notification to UDM */
 #define UDM_SDM_SUBSCRIBED(__aMF) \
     ((__aMF) && ((__aMF)->data_change_subscription.id))

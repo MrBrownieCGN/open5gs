@@ -361,8 +361,29 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                         AMF_UE_CLEAR_N2_TRANSFER(amf_ue, handover_request);
                     }
                 } else {
-                    ogs_error("Invalid STATE[%d]", state);
-                    ogs_assert_if_reached();
+                    /*
+                     * Peer SMF returned a /modify success response with
+                     * n2_sm_info_type=PDU_RES_SETUP_REQ for an AMF
+                     * transaction whose state does not drive PDU Resource
+                     * setup toward the gNB (i.e. not REGISTRATION_REQUEST,
+                     * SERVICE_REQUEST or HANDOVER_REQUIRED).
+                     *
+                     * This is a peer-NF protocol violation. Mirror the
+                     * default arm of this switch (lines 505-512) and
+                     * surface a semantic-error NGAP indication toward
+                     * the gNB instead of asserting. Closes #4408.
+                     */
+                    ogs_error("[%s:%d] /modify success with "
+                            "n2SmInfoType=PDU_RES_SETUP_REQ in invalid "
+                            "STATE[%d]", amf_ue->supi, sess->psi, state);
+                    if (ran_ue) {
+                        r = ngap_send_error_indication2(ran_ue,
+                                NGAP_Cause_PR_protocol,
+                                NGAP_CauseProtocol_semantic_error);
+                        ogs_expect(r == OGS_OK);
+                        ogs_assert(r != OGS_ERROR);
+                    }
+                    return OGS_ERROR;
                 }
                 break;
 
@@ -637,13 +658,36 @@ int amf_nsmf_pdusession_handle_update_sm_context(
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_REGISTRATION_REQUEST) {
 
-                /* Not reached here */
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo while the AMF transaction is driving the
+                 * activation phase of a Registration Request. The
+                 * activation cannot proceed without the PDU Session
+                 * Resource Setup transfer, so reject the NAS procedure
+                 * the way line 295-300 already does on the parallel
+                 * "n2 sm_info_type present but n2smbuf missing" path.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo on "
+                        "REGISTRATION_REQUEST", amf_ue->supi, sess->psi);
+                nas_5gs_send_gmm_reject(ran_ue, amf_ue,
+                        OGS_5GMM_CAUSE_5GS_SERVICES_NOT_ALLOWED);
+                AMF_SESS_CLEAR(sess);
+                return OGS_ERROR;
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_SERVICE_REQUEST) {
 
-                /* Not reached here */
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo while the AMF transaction is driving Service
+                 * Request activation. Same recovery as the
+                 * REGISTRATION_REQUEST arm above. Closes #4409.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo on "
+                        "SERVICE_REQUEST", amf_ue->supi, sess->psi);
+                nas_5gs_send_gmm_reject(ran_ue, amf_ue,
+                        OGS_5GMM_CAUSE_5GS_SERVICES_NOT_ALLOWED);
+                AMF_SESS_CLEAR(sess);
+                return OGS_ERROR;
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_N2_RELEASED) {
 
@@ -716,18 +760,63 @@ int amf_nsmf_pdusession_handle_update_sm_context(
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_PATH_SWITCH_REQUEST) {
 
-                /* Not reached here */
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo while the AMF transaction is driving an Xn
+                 * Path Switch. The Path-Switch-Request-Ack transfer is
+                 * mandatory for the procedure (TS 38.413 §9.2.1.2), so
+                 * surface a protocol error toward the gNB instead of
+                 * asserting.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo on "
+                        "PATH_SWITCH_REQUEST", amf_ue->supi, sess->psi);
+                if (ran_ue) {
+                    r = ngap_send_error_indication2(ran_ue,
+                            NGAP_Cause_PR_protocol,
+                            NGAP_CauseProtocol_semantic_error);
+                    ogs_expect(r == OGS_OK);
+                    ogs_assert(r != OGS_ERROR);
+                }
+                return OGS_ERROR;
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_HANDOVER_REQUIRED) {
 
-                /* Not reached here */
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo while the AMF is preparing a Handover. The
+                 * Handover-Request transfer is mandatory for the
+                 * procedure (TS 38.413 §9.2.3.4); without it the AMF
+                 * cannot drive HandoverRequest toward the target gNB.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo on "
+                        "HANDOVER_REQUIRED", amf_ue->supi, sess->psi);
+                if (ran_ue) {
+                    r = ngap_send_error_indication2(ran_ue,
+                            NGAP_Cause_PR_protocol,
+                            NGAP_CauseProtocol_semantic_error);
+                    ogs_expect(r == OGS_OK);
+                    ogs_assert(r != OGS_ERROR);
+                }
+                return OGS_ERROR;
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_HANDOVER_REQ_ACK) {
 
-                /* Not reached here */
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo while the AMF is awaiting the Handover-
+                 * Command transfer for the source gNB. Same recovery
+                 * as the HANDOVER_REQUIRED arm above.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo on "
+                        "HANDOVER_REQ_ACK", amf_ue->supi, sess->psi);
+                if (ran_ue) {
+                    r = ngap_send_error_indication2(ran_ue,
+                            NGAP_Cause_PR_protocol,
+                            NGAP_CauseProtocol_semantic_error);
+                    ogs_expect(r == OGS_OK);
+                    ogs_assert(r != OGS_ERROR);
+                }
+                return OGS_ERROR;
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_HANDOVER_CANCEL) {
 
@@ -941,8 +1030,25 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                                 amf_self()->time.t3512.value + 240));
                 }
             } else {
-                ogs_error("Invalid STATE[%d]", state);
-                ogs_assert_if_reached();
+                /*
+                 * Peer SMF returned a /modify success response with no
+                 * n2SmInfo for an AMF transaction state that this
+                 * handler does not model. Surface a semantic-error
+                 * NGAP indication toward the gNB if it is still alive
+                 * and abort the AMF-side transaction instead of
+                 * asserting on peer input.
+                 */
+                ogs_error("[%s:%d] /modify success without n2SmInfo in "
+                        "unhandled STATE[%d]",
+                        amf_ue->supi, sess->psi, state);
+                if (ran_ue) {
+                    r = ngap_send_error_indication2(ran_ue,
+                            NGAP_Cause_PR_protocol,
+                            NGAP_CauseProtocol_semantic_error);
+                    ogs_expect(r == OGS_OK);
+                    ogs_assert(r != OGS_ERROR);
+                }
+                return OGS_ERROR;
             }
 
             /*

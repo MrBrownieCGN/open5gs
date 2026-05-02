@@ -104,8 +104,23 @@ ogs_pkbuf_t *gmm_build_registration_accept(amf_ue_t *amf_ue)
             &amf_self()->served_tai[served_tai_index].list1,
             &amf_self()->served_tai[served_tai_index].list2));
 
-    /* Set Allowed NSSAI */
-    ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+    /*
+     * Set Allowed NSSAI.
+     *
+     * Guard against UE-state shapes where the AMF reaches the
+     * Registration Accept builder before allowed_nssai has been
+     * populated by UDM subscriber-data processing. The same
+     * defensive shape is applied at every NGAP builder that emits
+     * the AllowedNSSAI IE (issue #4422 family). The message struct
+     * lives on the stack here, so a simple NULL return is sufficient
+     * for cleanup; the caller in src/amf/nas-path.c handles the
+     * NULL by emitting an error log and returning OGS_ERROR.
+     */
+    if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+        ogs_error("[%s] No allowed_nssai populated for Registration Accept",
+                amf_ue->supi);
+        return NULL;
+    }
 
     ogs_nas_build_nssai(allowed_nssai,
             amf_ue->allowed_nssai.s_nssai,

@@ -188,11 +188,19 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
                     ngapbuf =
                         ngap_sess_build_pdu_session_resource_setup_request(
                                 ran_ue, sess, gmmbuf, n2buf);
-                    ogs_assert(ngapbuf);
+                    if (!ngapbuf) {
+                        ogs_error("ngap_sess_build_pdu_session_resource_"
+                                "setup_request() failed");
+                        return OGS_ERROR;
+                    }
                 } else {
                     ngapbuf = ngap_sess_build_initial_context_setup_request(
                             ran_ue, sess, gmmbuf, n2buf);
-                    ogs_assert(ngapbuf);
+                    if (!ngapbuf) {
+                        ogs_error("ngap_sess_build_initial_context_"
+                                "setup_request() failed");
+                        return OGS_ERROR;
+                    }
 
                     ran_ue->initial_context_setup_request_sent = true;
                 }

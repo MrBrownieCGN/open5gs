@@ -482,7 +482,23 @@ ogs_pkbuf_t *ngap_build_downlink_nas_transport(
 
         AllowedNSSAI = &ie->value.choice.AllowedNSSAI;
 
-        ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+        /*
+         * Guard against UE-state shapes where the AMF reaches the
+         * DownlinkNASTransport builder before allowed_nssai has been
+         * populated by UDM subscriber-data processing (e.g. crafted
+         * SecurityModeComplete carrying a Service Request NAS container
+         * during initial Registration — issue #4422 family).
+         *
+         * Bail out gracefully (free the partial PDU + return NULL) so
+         * that the caller in src/amf/nas-path.c surfaces a NAS error
+         * toward the UE instead of asserting the AMF process.
+         */
+        if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+            ogs_error("[%s] No allowed_nssai populated for "
+                    "DownlinkNASTransport", amf_ue->supi);
+            ogs_asn_free(&asn_DEF_NGAP_NGAP_PDU, &pdu);
+            return NULL;
+        }
         for (i = 0; i < amf_ue->allowed_nssai.num_of_s_nssai; i++) {
             NGAP_AllowedNSSAI_Item_t *NGAP_AllowedNSSAI_Item = NULL;
             NGAP_S_NSSAI_t *s_NSSAI = NULL;
@@ -704,7 +720,30 @@ ogs_pkbuf_t *ngap_ue_build_initial_context_setup_request(
     ogs_ngap_uint8_to_AMFPointer(ogs_amf_pointer(&amf_ue->guami->amf_id),
             &GUAMI->aMFPointer);
 
-    ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+    /*
+     * Guard against UE-state shapes where the AMF reaches an
+     * NGAP builder that requires AllowedNSSAI before allowed_nssai
+     * has been populated by UDM subscriber-data processing. The
+     * reported variant (issue #4422) is a crafted SecurityModeComplete
+     * carrying a Service Request NAS container during initial
+     * Registration: the AMF dispatches to gmm_handle_service_update
+     * -> activation path -> NGAP builder while the UE has not yet
+     * progressed past the Authentication exchange. Other state-
+     * machine bugs may produce the same shape at the other call
+     * sites of this guard, so the bail sits at every NGAP builder
+     * that emits AllowedNSSAI.
+     *
+     * Bail out gracefully (free the partial PDU + return NULL); the
+     * caller in src/amf/nas-path.c already handles a NULL builder
+     * return by emitting a per-builder error log and propagating
+     * OGS_ERROR up to the AMF NAS path.
+     */
+    if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+        ogs_error("[%s] No allowed_nssai populated for AllowedNSSAI IE",
+                amf_ue->supi);
+        ogs_asn_free(&asn_DEF_NGAP_NGAP_PDU, &pdu);
+        return NULL;
+    }
     for (i = 0; i < amf_ue->allowed_nssai.num_of_s_nssai; i++) {
         NGAP_AllowedNSSAI_Item_t *NGAP_AllowedNSSAI_Item = NULL;
         NGAP_S_NSSAI_t *s_NSSAI = NULL;
@@ -1176,7 +1215,30 @@ ogs_pkbuf_t *ngap_sess_build_initial_context_setup_request(
     ogs_ngap_uint8_to_AMFPointer(ogs_amf_pointer(&amf_ue->guami->amf_id),
             &GUAMI->aMFPointer);
 
-    ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+    /*
+     * Guard against UE-state shapes where the AMF reaches an
+     * NGAP builder that requires AllowedNSSAI before allowed_nssai
+     * has been populated by UDM subscriber-data processing. The
+     * reported variant (issue #4422) is a crafted SecurityModeComplete
+     * carrying a Service Request NAS container during initial
+     * Registration: the AMF dispatches to gmm_handle_service_update
+     * -> activation path -> NGAP builder while the UE has not yet
+     * progressed past the Authentication exchange. Other state-
+     * machine bugs may produce the same shape at the other call
+     * sites of this guard, so the bail sits at every NGAP builder
+     * that emits AllowedNSSAI.
+     *
+     * Bail out gracefully (free the partial PDU + return NULL); the
+     * caller in src/amf/nas-path.c already handles a NULL builder
+     * return by emitting a per-builder error log and propagating
+     * OGS_ERROR up to the AMF NAS path.
+     */
+    if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+        ogs_error("[%s] No allowed_nssai populated for AllowedNSSAI IE",
+                amf_ue->supi);
+        ogs_asn_free(&asn_DEF_NGAP_NGAP_PDU, &pdu);
+        return NULL;
+    }
     for (i = 0; i < amf_ue->allowed_nssai.num_of_s_nssai; i++) {
         NGAP_AllowedNSSAI_Item_t *NGAP_AllowedNSSAI_Item = NULL;
         NGAP_S_NSSAI_t *s_NSSAI = NULL;
@@ -2118,7 +2180,30 @@ ogs_pkbuf_t *ngap_build_path_switch_ack(amf_ue_t *amf_ue)
 
     AllowedNSSAI = &ie->value.choice.AllowedNSSAI;
 
-    ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+    /*
+     * Guard against UE-state shapes where the AMF reaches an
+     * NGAP builder that requires AllowedNSSAI before allowed_nssai
+     * has been populated by UDM subscriber-data processing. The
+     * reported variant (issue #4422) is a crafted SecurityModeComplete
+     * carrying a Service Request NAS container during initial
+     * Registration: the AMF dispatches to gmm_handle_service_update
+     * -> activation path -> NGAP builder while the UE has not yet
+     * progressed past the Authentication exchange. Other state-
+     * machine bugs may produce the same shape at the other call
+     * sites of this guard, so the bail sits at every NGAP builder
+     * that emits AllowedNSSAI.
+     *
+     * Bail out gracefully (free the partial PDU + return NULL); the
+     * caller in src/amf/nas-path.c already handles a NULL builder
+     * return by emitting a per-builder error log and propagating
+     * OGS_ERROR up to the AMF NAS path.
+     */
+    if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+        ogs_error("[%s] No allowed_nssai populated for AllowedNSSAI IE",
+                amf_ue->supi);
+        ogs_asn_free(&asn_DEF_NGAP_NGAP_PDU, &pdu);
+        return NULL;
+    }
     for (i = 0; i < amf_ue->allowed_nssai.num_of_s_nssai; i++) {
         NGAP_AllowedNSSAI_Item_t *NGAP_AllowedNSSAI_Item = NULL;
         NGAP_S_NSSAI_t *s_NSSAI = NULL;
@@ -2371,7 +2456,30 @@ ogs_pkbuf_t *ngap_build_handover_request(ran_ue_t *target_ue)
 
     AllowedNSSAI = &ie->value.choice.AllowedNSSAI;
 
-    ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai);
+    /*
+     * Guard against UE-state shapes where the AMF reaches an
+     * NGAP builder that requires AllowedNSSAI before allowed_nssai
+     * has been populated by UDM subscriber-data processing. The
+     * reported variant (issue #4422) is a crafted SecurityModeComplete
+     * carrying a Service Request NAS container during initial
+     * Registration: the AMF dispatches to gmm_handle_service_update
+     * -> activation path -> NGAP builder while the UE has not yet
+     * progressed past the Authentication exchange. Other state-
+     * machine bugs may produce the same shape at the other call
+     * sites of this guard, so the bail sits at every NGAP builder
+     * that emits AllowedNSSAI.
+     *
+     * Bail out gracefully (free the partial PDU + return NULL); the
+     * caller in src/amf/nas-path.c already handles a NULL builder
+     * return by emitting a per-builder error log and propagating
+     * OGS_ERROR up to the AMF NAS path.
+     */
+    if (!amf_ue->allowed_nssai.num_of_s_nssai) {
+        ogs_error("[%s] No allowed_nssai populated for AllowedNSSAI IE",
+                amf_ue->supi);
+        ogs_asn_free(&asn_DEF_NGAP_NGAP_PDU, &pdu);
+        return NULL;
+    }
     for (i = 0; i < amf_ue->allowed_nssai.num_of_s_nssai; i++) {
         NGAP_AllowedNSSAI_Item_t *NGAP_AllowedNSSAI_Item = NULL;
         NGAP_S_NSSAI_t *s_NSSAI = NULL;

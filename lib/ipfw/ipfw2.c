@@ -3290,16 +3290,28 @@ add_proto0(ipfw_insn *cmd, char *av, u_char *protop)
 
 	proto = strtol(av, &ep, 10);
 	if (*ep != '\0' || proto <= 0) {
-#if 0 /* modified by acetcom */
-		if ((pe = getprotobyname(av)) == NULL)
-			return NULL;
-#else
+		/*
+		 * Returning NULL here matches the original BSD ipfw2 behaviour:
+		 * the caller (add_proto / add_proto_compat -> compile_rule)
+		 * detects the NULL and surfaces the failure through errx(),
+		 * which has been overridden in this tree at the top of this
+		 * file (#define errx(eval, ...) ogs_log_message(...)) so it
+		 * just logs and returns instead of exiting. Closes #4407,
+		 * which reported an SMF crash on PCC-rule compilation when
+		 * getprotobyname() returned NULL (e.g. transient NSS state,
+		 * a containerised image without /etc/protocols, or an
+		 * unrecognised protocol token in a flow description). The
+		 * previous ogs_fatal() + ogs_assert_if_reached() variant
+		 * (added in #977 / commit 182a61dc0) escalated a recoverable
+		 * input-shape problem into a process-wide SMF abort, taking
+		 * down all sessions on the affected NF.
+		 */
 		if ((pe = getprotobyname(av)) == NULL) {
-            ogs_fatal("getprotobyname('%s') failed", av);
-            ogs_assert_if_reached();
+			ogs_error("getprotobyname('%s') failed — invalid "
+				"protocol token, missing /etc/protocols, or "
+				"transient NSS lookup failure", av);
 			return NULL;
-        }
-#endif
+		}
 		proto = pe->p_proto;
 	}
 

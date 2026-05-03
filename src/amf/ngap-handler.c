@@ -497,7 +497,39 @@ void ngap_handle_initial_ue_message(amf_gnb_t *gnb, ogs_ngap_message_t *message)
     }
 
     ran_ue = ran_ue_find_by_ran_ue_ngap_id(gnb, *RAN_UE_NGAP_ID);
-    if (!ran_ue) {
+    if (ran_ue) {
+        /*
+         * TS 38.413 §10.4 — logical error handling.
+         *
+         * The NG-RAN node must use UPLINK NAS TRANSPORT (not a new
+         * INITIAL UE MESSAGE) to convey subsequent NAS messages on
+         * an already-established NAS signalling connection. Reusing
+         * the RAN_UE_NGAP_ID in a fresh INITIAL UE MESSAGE while the
+         * AMF still holds a NAS context with that same ID is a
+         * logical error on the NG-RAN side, not a fresh attach.
+         *
+         * Per §10.4 the AMF shall respond with an ERROR INDICATION;
+         * a Protocol cause of "Message not compatible with receiver
+         * state" matches the spec wording (§9.3.1.2): the message
+         * is inconsistent with the AMF's current state for that
+         * RAN_UE_NGAP_ID.
+         *
+         * Closes #4481.
+         */
+        ogs_warn("[gnb %d] INITIAL UE MESSAGE with already-active "
+                "RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld] — TS 38.413 "
+                "§10.4 logical error",
+                gnb->gnb_id, (long long)*RAN_UE_NGAP_ID,
+                (long long)ran_ue->amf_ue_ngap_id);
+        r = ngap_send_error_indication(gnb,
+                (uint64_t *)RAN_UE_NGAP_ID, &ran_ue->amf_ue_ngap_id,
+                NGAP_Cause_PR_protocol,
+                NGAP_CauseProtocol_message_not_compatible_with_receiver_state);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+    {
         ran_ue = ran_ue_add(gnb, *RAN_UE_NGAP_ID);
         if (ran_ue == NULL) {
             r = ngap_send_error_indication(gnb, NULL, NULL,

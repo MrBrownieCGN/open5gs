@@ -1189,8 +1189,28 @@ ogs_pfcp_far_t *ogs_pfcp_handle_create_far(ogs_pfcp_sess_t *sess,
             ogs_pfcp_tlv_outer_header_creation_t *outer_header_creation =
                 &message->forwarding_parameters.outer_header_creation;
 
-            ogs_assert(outer_header_creation->data);
-            ogs_assert(outer_header_creation->len);
+            /*
+             * Guard against malformed peer-supplied OuterHeaderCreation
+             * IE (TS 29.244 §8.2.56). The IE shall carry at least the
+             * 16-bit Description field; len = 0 or NULL data triggers
+             * a peer-NF abort via the assertions previously present
+             * here (closes #4423). Surface a spec-compliant cause back
+             * to the peer instead of crashing.
+             */
+            /*
+             * Per TS 29.244 §8.2.56 the IE shall carry at least the
+             * 16-bit Outer Header Creation Description field.
+             */
+            if (!outer_header_creation->data ||
+                    outer_header_creation->len < sizeof(uint16_t)) {
+                ogs_error("Invalid OuterHeaderCreation IE "
+                        "[data:%p len:%d min:%zu]",
+                        outer_header_creation->data,
+                        outer_header_creation->len, sizeof(uint16_t));
+                *cause_value = OGS_PFCP_CAUSE_INVALID_LENGTH;
+                *offending_ie_value = OGS_PFCP_OUTER_HEADER_CREATION_TYPE;
+                return NULL;
+            }
 
             memcpy(&far->outer_header_creation, outer_header_creation->data,
                     ogs_min(sizeof(far->outer_header_creation),
@@ -1307,8 +1327,26 @@ ogs_pfcp_far_t *ogs_pfcp_handle_update_far(ogs_pfcp_sess_t *sess,
             ogs_pfcp_tlv_outer_header_creation_t *outer_header_creation =
                 &message->update_forwarding_parameters.outer_header_creation;
 
-            ogs_assert(outer_header_creation->data);
-            ogs_assert(outer_header_creation->len);
+            /*
+             * Same defensive guard as the create-FAR path above:
+             * malformed peer-supplied OuterHeaderCreation IE in a
+             * Session Modification Request must not abort the
+             * UPF/SGW-U process (closes #4423 sibling site).
+             */
+            /*
+             * Per TS 29.244 §8.2.56 the IE shall carry at least the
+             * 16-bit Outer Header Creation Description field.
+             */
+            if (!outer_header_creation->data ||
+                    outer_header_creation->len < sizeof(uint16_t)) {
+                ogs_error("Invalid OuterHeaderCreation IE "
+                        "[data:%p len:%d min:%zu]",
+                        outer_header_creation->data,
+                        outer_header_creation->len, sizeof(uint16_t));
+                *cause_value = OGS_PFCP_CAUSE_INVALID_LENGTH;
+                *offending_ie_value = OGS_PFCP_OUTER_HEADER_CREATION_TYPE;
+                return NULL;
+            }
 
             memcpy(&far->outer_header_creation, outer_header_creation->data,
                     ogs_min(sizeof(far->outer_header_creation),

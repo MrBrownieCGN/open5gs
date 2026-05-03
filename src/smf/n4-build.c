@@ -17,6 +17,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <inttypes.h>
+
 #include "context.h"
 #include "n4-build.h"
 
@@ -334,9 +336,33 @@ ogs_pkbuf_t *smf_n4_build_pdr_to_modify_list(
             num_of_update_urr++;
         }
     }
-    ogs_assert(num_of_remove_pdr + num_of_remove_far + num_of_create_pdr +
+    /*
+     * Guard against peer-input that walks the pdr_to_modify_list /
+     * urr_list without producing a single PDR/FAR/QER/URR action
+     * (e.g. PDUSessionResourceSetupResponse from a gNB carrying only
+     * `qosFlowIdentifier` and no `upTNLInformation`, closes #4413).
+     *
+     * The empty-list assertion was an engineering invariant — every
+     * call site upstream is expected to set modify_flags such that
+     * at least one action is emitted. With malformed peer input that
+     * upstream guarantee is violated. Surface the inconsistency as a
+     * NULL builder return; the caller in smf_pfcp_send_modify_list()
+     * already handles NULL by logging "modify_list() failed" and
+     * returning OGS_ERROR up the procedure stack, which propagates to
+     * the AMF as a normal SMF-side failure rather than crashing the
+     * SMF process.
+     */
+    if ((num_of_remove_pdr + num_of_remove_far + num_of_create_pdr +
             num_of_create_far + num_of_update_pdr + num_of_update_far +
-            num_of_update_qer + num_of_update_urr);
+            num_of_update_qer + num_of_update_urr) == 0) {
+        ogs_error("Empty PFCP Session Modification list — "
+                "no PDR/FAR/QER/URR action emitted "
+                "(modify_flags=0x%" PRIx64 ")", modify_flags);
+        if (modify_flags & OGS_PFCP_MODIFY_CREATE)
+            ogs_pfcp_pdrbuf_clear();
+        ogs_free(pfcp_message);
+        return NULL;
+    }
 
     pfcp_message->h.type = type;
     pkbuf = ogs_pfcp_build_msg(pfcp_message);
@@ -631,10 +657,30 @@ ogs_pkbuf_t *smf_n4_build_qos_flow_to_modify_list(
         }
     }
 
-    ogs_assert(num_of_remove_pdr + num_of_remove_far + num_of_remove_qer +
+    /*
+     * Same defensive guard as smf_n4_build_pdr_to_modify_list() above:
+     * walk-without-action means the peer input violated the upstream
+     * contract that modify_flags implies at least one PDR/FAR/QER/URR
+     * action. Bail with NULL instead of asserting (sibling site of
+     * #4413).
+     */
+    if ((num_of_remove_pdr + num_of_remove_far + num_of_remove_qer +
             num_of_remove_urr + num_of_create_pdr + num_of_create_far +
             num_of_create_qer + num_of_create_urr + num_of_update_pdr +
-            num_of_update_far + num_of_update_qer + num_of_update_urr);
+            num_of_update_far + num_of_update_qer + num_of_update_urr) == 0) {
+        ogs_error("Empty PFCP Session Modification (QoS-Flow) list — "
+                "no action emitted (modify_flags=0x%" PRIx64 ")",
+                modify_flags);
+        if (modify_flags &
+                (OGS_PFCP_MODIFY_CREATE|
+                 OGS_PFCP_MODIFY_TFT_NEW|OGS_PFCP_MODIFY_TFT_ADD|
+                 OGS_PFCP_MODIFY_TFT_REPLACE|OGS_PFCP_MODIFY_TFT_DELETE|
+                 OGS_PFCP_MODIFY_EPC_TFT_UPDATE|
+                 OGS_PFCP_MODIFY_OUTER_HEADER_REMOVAL))
+            ogs_pfcp_pdrbuf_clear();
+        ogs_free(pfcp_message);
+        return NULL;
+    }
 
     pfcp_message->h.type = type;
     pkbuf = ogs_pfcp_build_msg(pfcp_message);

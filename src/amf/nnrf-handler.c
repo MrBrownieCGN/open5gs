@@ -69,12 +69,27 @@ void amf_nnrf_handle_nf_discover(
 
     if (sbi_object->type == OGS_SBI_OBJ_UE_TYPE) {
         amf_ue = amf_ue_find_by_id(sbi_object_id);
-        ogs_assert(amf_ue);
+        if (!amf_ue) {
+            ogs_error("(NF discover) UE context has already been removed "
+                    "[obj_id=%d]", (int)sbi_object_id);
+            ogs_sbi_xact_remove(xact);
+            return;
+        }
     } else if (sbi_object->type == OGS_SBI_OBJ_SESS_TYPE) {
         sess = amf_sess_find_by_id(sbi_object_id);
-        ogs_assert(sess);
+        if (!sess) {
+            ogs_error("(NF discover) Session context has already been removed "
+                    "[obj_id=%d]", (int)sbi_object_id);
+            ogs_sbi_xact_remove(xact);
+            return;
+        }
         amf_ue = amf_ue_find_by_id(sess->amf_ue_id);
-        ogs_assert(amf_ue);
+        if (!amf_ue) {
+            ogs_error("(NF discover) UE context has already been removed "
+                    "for session [psi=%d]", sess->psi);
+            ogs_sbi_xact_remove(xact);
+            return;
+        }
 
         if (xact->user_data) {
             amf_sbi_xact_ctx_t *ctx = xact->user_data;
@@ -86,7 +101,13 @@ void amf_nnrf_handle_nf_discover(
         ogs_assert(ran_ue_id >= OGS_MIN_POOL_ID &&
                 ran_ue_id <= OGS_MAX_POOL_ID);
         ran_ue = ran_ue_find_by_id(ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("[%s:%d:%d] RAN-NG context has already been removed "
+                    "(delayed NRF Discovery response after RAN-UE release)",
+                    amf_ue->supi, sess->psi, sess->pti);
+            ogs_sbi_xact_remove(xact);
+            return;
+        }
     } else {
         ogs_fatal("(NF discover) Not implemented [%s:%d]",
             ogs_sbi_service_type_to_name(service_type), sbi_object->type);

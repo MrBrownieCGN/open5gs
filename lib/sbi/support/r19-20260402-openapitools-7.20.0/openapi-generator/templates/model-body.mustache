@@ -421,13 +421,18 @@ OpenAPI_{{classname}}_t *OpenAPI_{{classname}}_parseFromJSON(cJSON *{{classname}
 
 {{#vars}}
     {{#isArray}}
-    {{^-first}}} else {{/-first}}if (cJSON_IsArray({{classname}}JSON)) {
+    {{^-first}}} else {{/-first}}if (cJSON_IsArray({{classname}}JSON){{#vendorExtensions.x-open5gs-union-member}} &&
+            cJSON_IsObject(cJSON_GetArrayItem({{classname}}JSON, 0)) &&
+            cJSON_GetObjectItemCaseSensitive(
+                cJSON_GetArrayItem({{classname}}JSON, 0), "{{{vendorExtensions.x-open5gs-union-member}}}"){{/vendorExtensions.x-open5gs-union-member}}) {
         cJSON *{{{name}}}_local = NULL;
 
         {{{name}}} = OpenAPI_list_create();
 
         cJSON_ArrayForEach({{{name}}}_local, {{classname}}JSON) {
-            if (!cJSON_IsObject({{{name}}}_local)) {
+            if (!cJSON_IsObject({{{name}}}_local){{#vendorExtensions.x-open5gs-union-member}} ||
+                    !cJSON_GetObjectItemCaseSensitive(
+                        {{{name}}}_local, "{{{vendorExtensions.x-open5gs-union-member}}}"){{/vendorExtensions.x-open5gs-union-member}}) {
                 ogs_error("OpenAPI_{{classname}}_parseFromJSON() failed [{{{name}}}]");
                 goto end;
             }

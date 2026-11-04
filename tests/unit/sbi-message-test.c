@@ -18,6 +18,7 @@
  */
 
 #include "ogs-sbi.h"
+#include "model/hss_authentication_vectors.h"
 #include "contrib/multipart_parser.h"
 #include "core/abts.h"
 
@@ -1359,6 +1360,129 @@ static void sbi_message_test14(abts_case *tc, void *data)
     }
 }
 
+/*
+ * HssAuthenticationVectors (TS 29.503 clause 6.3.6.2.12) is a bare array
+ * of AvEpsAka, AvImsGbaEapAka or AvEapAkaPrime on the wire. The arrays
+ * share the JSON type and are told apart by kasme, ck or ckPrime.
+ */
+#define HSS_AV_HEX "\"00112233445566778899aabbccddeeff\""
+#define HSS_AV_EPS_AKA \
+    "{\"avType\":\"EPS_AKA\",\"rand\":" HSS_AV_HEX ",\"xres\":" HSS_AV_HEX \
+    ",\"autn\":" HSS_AV_HEX ",\"kasme\":" HSS_AV_HEX "}"
+#define HSS_AV_IMS_AKA \
+    "{\"avType\":\"IMS_AKA\",\"rand\":" HSS_AV_HEX ",\"xres\":" HSS_AV_HEX \
+    ",\"autn\":" HSS_AV_HEX ",\"ck\":" HSS_AV_HEX ",\"ik\":" HSS_AV_HEX "}"
+#define HSS_AV_EAP_AKA_PRIME \
+    "{\"avType\":\"EAP_AKA_PRIME\",\"rand\":" HSS_AV_HEX \
+    ",\"xres\":" HSS_AV_HEX ",\"autn\":" HSS_AV_HEX \
+    ",\"ckPrime\":" HSS_AV_HEX ",\"ikPrime\":" HSS_AV_HEX "}"
+
+static void sbi_message_test15(abts_case *tc, void *data)
+{
+    const char *ims_array = "[" HSS_AV_IMS_AKA "," HSS_AV_IMS_AKA "]";
+    const char *eps_array = "[" HSS_AV_EPS_AKA "]";
+    const char *eap_aka_prime_array = "[" HSS_AV_EAP_AKA_PRIME "]";
+    const char *malformed[] = {
+        /* mixed alternatives, in either order */
+        "[" HSS_AV_IMS_AKA "," HSS_AV_EPS_AKA "]",
+        "[" HSS_AV_EPS_AKA "," HSS_AV_IMS_AKA "]",
+        /* a non-object element after a valid one */
+        "[" HSS_AV_IMS_AKA ",1]",
+        /* minItems 1 */
+        "[]",
+        /* the wrapper object is not the wire format */
+        "{\"AvImsGbaEapAkaList\":[" HSS_AV_IMS_AKA "]}",
+    };
+    OpenAPI_hss_authentication_vectors_t *vectors = NULL;
+    OpenAPI_hss_authentication_vectors_t *copy = NULL;
+    cJSON *item = NULL;
+    char *content = NULL;
+    size_t i;
+    int id = ogs_log_get_domain_id("core");
+    ogs_log_level_e level = ogs_log_get_domain_level(id);
+
+    /* IMS AKA: a bare array in, the same bare array out */
+    item = cJSON_Parse(ims_array);
+    ABTS_PTR_NOTNULL(tc, item);
+    vectors = OpenAPI_hss_authentication_vectors_parseFromJSON(item);
+    cJSON_Delete(item);
+    ABTS_PTR_NOTNULL(tc, vectors);
+    ABTS_PTR_NOTNULL(tc, vectors->av_ims_gba_eap_aka_list);
+    ABTS_INT_EQUAL(tc, 2, vectors->av_ims_gba_eap_aka_list->count);
+    ABTS_TRUE(tc, vectors->av_eps_aka_list == NULL);
+    ABTS_TRUE(tc, vectors->av_eap_aka_prime_list == NULL);
+
+    copy = OpenAPI_hss_authentication_vectors_copy(NULL, vectors);
+    ABTS_PTR_NOTNULL(tc, copy);
+    ABTS_PTR_NOTNULL(tc, copy->av_ims_gba_eap_aka_list);
+    ABTS_INT_EQUAL(tc, 2, copy->av_ims_gba_eap_aka_list->count);
+
+    item = OpenAPI_hss_authentication_vectors_convertToJSON(copy);
+    ABTS_PTR_NOTNULL(tc, item);
+    ABTS_TRUE(tc, cJSON_IsArray(item));
+    content = cJSON_PrintUnformatted(item);
+    ABTS_STR_EQUAL(tc, ims_array, content);
+    ogs_free(content);
+    cJSON_Delete(item);
+    OpenAPI_hss_authentication_vectors_free(copy);
+    OpenAPI_hss_authentication_vectors_free(vectors);
+
+    /* EPS AKA, selected by kasme */
+    item = cJSON_Parse(eps_array);
+    ABTS_PTR_NOTNULL(tc, item);
+    vectors = OpenAPI_hss_authentication_vectors_parseFromJSON(item);
+    cJSON_Delete(item);
+    ABTS_PTR_NOTNULL(tc, vectors);
+    ABTS_PTR_NOTNULL(tc, vectors->av_eps_aka_list);
+    ABTS_INT_EQUAL(tc, 1, vectors->av_eps_aka_list->count);
+    ABTS_TRUE(tc, vectors->av_ims_gba_eap_aka_list == NULL);
+    ABTS_TRUE(tc, vectors->av_eap_aka_prime_list == NULL);
+
+    item = OpenAPI_hss_authentication_vectors_convertToJSON(vectors);
+    ABTS_PTR_NOTNULL(tc, item);
+    content = cJSON_PrintUnformatted(item);
+    ABTS_STR_EQUAL(tc, eps_array, content);
+    ogs_free(content);
+    cJSON_Delete(item);
+    OpenAPI_hss_authentication_vectors_free(vectors);
+
+    /* EAP-AKA', selected by ckPrime */
+    item = cJSON_Parse(eap_aka_prime_array);
+    ABTS_PTR_NOTNULL(tc, item);
+    vectors = OpenAPI_hss_authentication_vectors_parseFromJSON(item);
+    cJSON_Delete(item);
+    ABTS_PTR_NOTNULL(tc, vectors);
+    ABTS_PTR_NOTNULL(tc, vectors->av_eap_aka_prime_list);
+    ABTS_INT_EQUAL(tc, 1, vectors->av_eap_aka_prime_list->count);
+    ABTS_TRUE(tc, vectors->av_eps_aka_list == NULL);
+    ABTS_TRUE(tc, vectors->av_ims_gba_eap_aka_list == NULL);
+    OpenAPI_hss_authentication_vectors_free(vectors);
+
+    /*
+     * Malformed input and misuse are rejected with a diagnostic. Only
+     * the return value matters here, so silence the domain meanwhile.
+     */
+    ogs_log_set_domain_level(id, OGS_LOG_NONE);
+
+    for (i = 0; i < OGS_ARRAY_SIZE(malformed); i++) {
+        item = cJSON_Parse(malformed[i]);
+        ABTS_PTR_NOTNULL(tc, item);
+        vectors = OpenAPI_hss_authentication_vectors_parseFromJSON(item);
+        cJSON_Delete(item);
+        ABTS_TRUE(tc, vectors == NULL);
+        OpenAPI_hss_authentication_vectors_free(vectors);
+    }
+
+    /* exactly one alternative must be set */
+    vectors = OpenAPI_hss_authentication_vectors_create(NULL, NULL, NULL);
+    ABTS_PTR_NOTNULL(tc, vectors);
+    ABTS_TRUE(tc,
+            OpenAPI_hss_authentication_vectors_convertToJSON(vectors) == NULL);
+    OpenAPI_hss_authentication_vectors_free(vectors);
+
+    ogs_log_set_domain_level(id, level);
+}
+
 abts_suite *test_sbi_message(abts_suite *suite)
 {
     size_t i;
@@ -1389,6 +1513,7 @@ abts_suite *test_sbi_message(abts_suite *suite)
     abts_run_test(suite, sbi_message_test12, NULL);
     abts_run_test(suite, sbi_message_test13, NULL);
     abts_run_test(suite, sbi_message_test14, NULL);
+    abts_run_test(suite, sbi_message_test15, NULL);
 
     return suite;
 }

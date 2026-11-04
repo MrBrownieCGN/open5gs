@@ -762,6 +762,7 @@ components:
 #          maxItems: 5
 #
       type: object
+      x-open5gs-union: true
       properties:
         AvEpsAkaList:
           type: array
@@ -769,18 +770,21 @@ components:
             $ref: '#/components/schemas/AvEpsAka'
           minItems: 1
           maxItems: 5
+          x-open5gs-union-member: kasme
         AvImsGbaEapAkaList:
           type: array
           items:
             $ref: '#/components/schemas/AvImsGbaEapAka'
           minItems: 1
           maxItems: 5
+          x-open5gs-union-member: ck
         AvEapAkaPrimeList:
           type: array
           items:
             $ref: '#/components/schemas/AvEapAkaPrime'
           minItems: 1
           maxItems: 5
+          x-open5gs-union-member: ckPrime
     AvEpsAka:
       type: object
       required:

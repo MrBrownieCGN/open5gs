@@ -51,6 +51,11 @@ void OpenAPI_hss_authentication_vectors_free(OpenAPI_hss_authentication_vectors_
     ogs_free(hss_authentication_vectors);
 }
 
+/*
+ * oneOf union (x-open5gs-union): the members are the alternatives of the
+ * original oneOf. Exactly one is set, and it is the JSON value itself
+ * rather than a property of a wrapper object.
+ */
 cJSON *OpenAPI_hss_authentication_vectors_convertToJSON(OpenAPI_hss_authentication_vectors_t *hss_authentication_vectors)
 {
     cJSON *item = NULL;
@@ -61,81 +66,88 @@ cJSON *OpenAPI_hss_authentication_vectors_convertToJSON(OpenAPI_hss_authenticati
         return NULL;
     }
 
-    item = cJSON_CreateObject();
+    if ((hss_authentication_vectors->av_eps_aka_list != NULL) +
+            (hss_authentication_vectors->av_ims_gba_eap_aka_list != NULL) +
+            (hss_authentication_vectors->av_eap_aka_prime_list != NULL) != 1) {
+        ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [HssAuthenticationVectors]: exactly one alternative must be set");
+        return NULL;
+    }
+
     if (hss_authentication_vectors->av_eps_aka_list) {
-    cJSON *av_eps_aka_listList = cJSON_AddArrayToObject(item, "AvEpsAkaList");
-    if (av_eps_aka_listList == NULL) {
-        ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eps_aka_list]");
-        goto end;
-    }
-    OpenAPI_list_for_each(hss_authentication_vectors->av_eps_aka_list, node) {
-        cJSON *itemLocal = OpenAPI_av_eps_aka_convertToJSON(node->data);
-        if (itemLocal == NULL) {
+        item = cJSON_CreateArray();
+        if (item == NULL) {
             ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eps_aka_list]");
-            goto end;
+            return NULL;
         }
-        cJSON_AddItemToArray(av_eps_aka_listList, itemLocal);
+        OpenAPI_list_for_each(hss_authentication_vectors->av_eps_aka_list, node) {
+            cJSON *itemLocal = OpenAPI_av_eps_aka_convertToJSON(node->data);
+            if (itemLocal == NULL) {
+                ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eps_aka_list]");
+                cJSON_Delete(item);
+                return NULL;
+            }
+            cJSON_AddItemToArray(item, itemLocal);
+        }
+        return item;
     }
-    }
-
     if (hss_authentication_vectors->av_ims_gba_eap_aka_list) {
-    cJSON *av_ims_gba_eap_aka_listList = cJSON_AddArrayToObject(item, "AvImsGbaEapAkaList");
-    if (av_ims_gba_eap_aka_listList == NULL) {
-        ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_ims_gba_eap_aka_list]");
-        goto end;
-    }
-    OpenAPI_list_for_each(hss_authentication_vectors->av_ims_gba_eap_aka_list, node) {
-        cJSON *itemLocal = OpenAPI_av_ims_gba_eap_aka_convertToJSON(node->data);
-        if (itemLocal == NULL) {
+        item = cJSON_CreateArray();
+        if (item == NULL) {
             ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_ims_gba_eap_aka_list]");
-            goto end;
+            return NULL;
         }
-        cJSON_AddItemToArray(av_ims_gba_eap_aka_listList, itemLocal);
+        OpenAPI_list_for_each(hss_authentication_vectors->av_ims_gba_eap_aka_list, node) {
+            cJSON *itemLocal = OpenAPI_av_ims_gba_eap_aka_convertToJSON(node->data);
+            if (itemLocal == NULL) {
+                ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_ims_gba_eap_aka_list]");
+                cJSON_Delete(item);
+                return NULL;
+            }
+            cJSON_AddItemToArray(item, itemLocal);
+        }
+        return item;
     }
-    }
-
     if (hss_authentication_vectors->av_eap_aka_prime_list) {
-    cJSON *av_eap_aka_prime_listList = cJSON_AddArrayToObject(item, "AvEapAkaPrimeList");
-    if (av_eap_aka_prime_listList == NULL) {
-        ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eap_aka_prime_list]");
-        goto end;
-    }
-    OpenAPI_list_for_each(hss_authentication_vectors->av_eap_aka_prime_list, node) {
-        cJSON *itemLocal = OpenAPI_av_eap_aka_prime_convertToJSON(node->data);
-        if (itemLocal == NULL) {
+        item = cJSON_CreateArray();
+        if (item == NULL) {
             ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eap_aka_prime_list]");
-            goto end;
+            return NULL;
         }
-        cJSON_AddItemToArray(av_eap_aka_prime_listList, itemLocal);
-    }
+        OpenAPI_list_for_each(hss_authentication_vectors->av_eap_aka_prime_list, node) {
+            cJSON *itemLocal = OpenAPI_av_eap_aka_prime_convertToJSON(node->data);
+            if (itemLocal == NULL) {
+                ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [av_eap_aka_prime_list]");
+                cJSON_Delete(item);
+                return NULL;
+            }
+            cJSON_AddItemToArray(item, itemLocal);
+        }
+        return item;
     }
 
-end:
-    return item;
+    ogs_error("OpenAPI_hss_authentication_vectors_convertToJSON() failed [HssAuthenticationVectors]");
+    return NULL;
 }
 
 OpenAPI_hss_authentication_vectors_t *OpenAPI_hss_authentication_vectors_parseFromJSON(cJSON *hss_authentication_vectorsJSON)
 {
-    OpenAPI_hss_authentication_vectors_t *hss_authentication_vectors_local_var = NULL;
     OpenAPI_lnode_t *node = NULL;
-    cJSON *av_eps_aka_list = NULL;
-    OpenAPI_list_t *av_eps_aka_listList = NULL;
-    cJSON *av_ims_gba_eap_aka_list = NULL;
-    OpenAPI_list_t *av_ims_gba_eap_aka_listList = NULL;
-    cJSON *av_eap_aka_prime_list = NULL;
-    OpenAPI_list_t *av_eap_aka_prime_listList = NULL;
-    av_eps_aka_list = cJSON_GetObjectItemCaseSensitive(hss_authentication_vectorsJSON, "AvEpsAkaList");
-    if (av_eps_aka_list) {
+    OpenAPI_list_t *av_eps_aka_list = NULL;
+    OpenAPI_list_t *av_ims_gba_eap_aka_list = NULL;
+    OpenAPI_list_t *av_eap_aka_prime_list = NULL;
+
+    if (cJSON_IsArray(hss_authentication_vectorsJSON) &&
+            cJSON_IsObject(cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0)) &&
+            cJSON_GetObjectItemCaseSensitive(
+                cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0), "kasme")) {
         cJSON *av_eps_aka_list_local = NULL;
-        if (!cJSON_IsArray(av_eps_aka_list)) {
-            ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_eps_aka_list]");
-            goto end;
-        }
 
-        av_eps_aka_listList = OpenAPI_list_create();
+        av_eps_aka_list = OpenAPI_list_create();
 
-        cJSON_ArrayForEach(av_eps_aka_list_local, av_eps_aka_list) {
-            if (!cJSON_IsObject(av_eps_aka_list_local)) {
+        cJSON_ArrayForEach(av_eps_aka_list_local, hss_authentication_vectorsJSON) {
+            if (!cJSON_IsObject(av_eps_aka_list_local) ||
+                    !cJSON_GetObjectItemCaseSensitive(
+                        av_eps_aka_list_local, "kasme")) {
                 ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_eps_aka_list]");
                 goto end;
             }
@@ -144,22 +156,20 @@ OpenAPI_hss_authentication_vectors_t *OpenAPI_hss_authentication_vectors_parseFr
                 ogs_error("No av_eps_aka_listItem");
                 goto end;
             }
-            OpenAPI_list_add(av_eps_aka_listList, av_eps_aka_listItem);
+            OpenAPI_list_add(av_eps_aka_list, av_eps_aka_listItem);
         }
-    }
-
-    av_ims_gba_eap_aka_list = cJSON_GetObjectItemCaseSensitive(hss_authentication_vectorsJSON, "AvImsGbaEapAkaList");
-    if (av_ims_gba_eap_aka_list) {
+    } else if (cJSON_IsArray(hss_authentication_vectorsJSON) &&
+            cJSON_IsObject(cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0)) &&
+            cJSON_GetObjectItemCaseSensitive(
+                cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0), "ck")) {
         cJSON *av_ims_gba_eap_aka_list_local = NULL;
-        if (!cJSON_IsArray(av_ims_gba_eap_aka_list)) {
-            ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_ims_gba_eap_aka_list]");
-            goto end;
-        }
 
-        av_ims_gba_eap_aka_listList = OpenAPI_list_create();
+        av_ims_gba_eap_aka_list = OpenAPI_list_create();
 
-        cJSON_ArrayForEach(av_ims_gba_eap_aka_list_local, av_ims_gba_eap_aka_list) {
-            if (!cJSON_IsObject(av_ims_gba_eap_aka_list_local)) {
+        cJSON_ArrayForEach(av_ims_gba_eap_aka_list_local, hss_authentication_vectorsJSON) {
+            if (!cJSON_IsObject(av_ims_gba_eap_aka_list_local) ||
+                    !cJSON_GetObjectItemCaseSensitive(
+                        av_ims_gba_eap_aka_list_local, "ck")) {
                 ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_ims_gba_eap_aka_list]");
                 goto end;
             }
@@ -168,22 +178,20 @@ OpenAPI_hss_authentication_vectors_t *OpenAPI_hss_authentication_vectors_parseFr
                 ogs_error("No av_ims_gba_eap_aka_listItem");
                 goto end;
             }
-            OpenAPI_list_add(av_ims_gba_eap_aka_listList, av_ims_gba_eap_aka_listItem);
+            OpenAPI_list_add(av_ims_gba_eap_aka_list, av_ims_gba_eap_aka_listItem);
         }
-    }
-
-    av_eap_aka_prime_list = cJSON_GetObjectItemCaseSensitive(hss_authentication_vectorsJSON, "AvEapAkaPrimeList");
-    if (av_eap_aka_prime_list) {
+    } else if (cJSON_IsArray(hss_authentication_vectorsJSON) &&
+            cJSON_IsObject(cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0)) &&
+            cJSON_GetObjectItemCaseSensitive(
+                cJSON_GetArrayItem(hss_authentication_vectorsJSON, 0), "ckPrime")) {
         cJSON *av_eap_aka_prime_list_local = NULL;
-        if (!cJSON_IsArray(av_eap_aka_prime_list)) {
-            ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_eap_aka_prime_list]");
-            goto end;
-        }
 
-        av_eap_aka_prime_listList = OpenAPI_list_create();
+        av_eap_aka_prime_list = OpenAPI_list_create();
 
-        cJSON_ArrayForEach(av_eap_aka_prime_list_local, av_eap_aka_prime_list) {
-            if (!cJSON_IsObject(av_eap_aka_prime_list_local)) {
+        cJSON_ArrayForEach(av_eap_aka_prime_list_local, hss_authentication_vectorsJSON) {
+            if (!cJSON_IsObject(av_eap_aka_prime_list_local) ||
+                    !cJSON_GetObjectItemCaseSensitive(
+                        av_eap_aka_prime_list_local, "ckPrime")) {
                 ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [av_eap_aka_prime_list]");
                 goto end;
             }
@@ -192,38 +200,35 @@ OpenAPI_hss_authentication_vectors_t *OpenAPI_hss_authentication_vectors_parseFr
                 ogs_error("No av_eap_aka_prime_listItem");
                 goto end;
             }
-            OpenAPI_list_add(av_eap_aka_prime_listList, av_eap_aka_prime_listItem);
+            OpenAPI_list_add(av_eap_aka_prime_list, av_eap_aka_prime_listItem);
         }
+    } else {
+        ogs_error("OpenAPI_hss_authentication_vectors_parseFromJSON() failed [HssAuthenticationVectors]");
+        goto end;
     }
 
-    hss_authentication_vectors_local_var = OpenAPI_hss_authentication_vectors_create (
-        av_eps_aka_list ? av_eps_aka_listList : NULL,
-        av_ims_gba_eap_aka_list ? av_ims_gba_eap_aka_listList : NULL,
-        av_eap_aka_prime_list ? av_eap_aka_prime_listList : NULL
-    );
-
-    return hss_authentication_vectors_local_var;
+    return OpenAPI_hss_authentication_vectors_create(av_eps_aka_list, av_ims_gba_eap_aka_list, av_eap_aka_prime_list);
 end:
-    if (av_eps_aka_listList) {
-        OpenAPI_list_for_each(av_eps_aka_listList, node) {
+    if (av_eps_aka_list) {
+        OpenAPI_list_for_each(av_eps_aka_list, node) {
             OpenAPI_av_eps_aka_free(node->data);
         }
-        OpenAPI_list_free(av_eps_aka_listList);
-        av_eps_aka_listList = NULL;
+        OpenAPI_list_free(av_eps_aka_list);
+        av_eps_aka_list = NULL;
     }
-    if (av_ims_gba_eap_aka_listList) {
-        OpenAPI_list_for_each(av_ims_gba_eap_aka_listList, node) {
+    if (av_ims_gba_eap_aka_list) {
+        OpenAPI_list_for_each(av_ims_gba_eap_aka_list, node) {
             OpenAPI_av_ims_gba_eap_aka_free(node->data);
         }
-        OpenAPI_list_free(av_ims_gba_eap_aka_listList);
-        av_ims_gba_eap_aka_listList = NULL;
+        OpenAPI_list_free(av_ims_gba_eap_aka_list);
+        av_ims_gba_eap_aka_list = NULL;
     }
-    if (av_eap_aka_prime_listList) {
-        OpenAPI_list_for_each(av_eap_aka_prime_listList, node) {
+    if (av_eap_aka_prime_list) {
+        OpenAPI_list_for_each(av_eap_aka_prime_list, node) {
             OpenAPI_av_eap_aka_prime_free(node->data);
         }
-        OpenAPI_list_free(av_eap_aka_prime_listList);
-        av_eap_aka_prime_listList = NULL;
+        OpenAPI_list_free(av_eap_aka_prime_list);
+        av_eap_aka_prime_list = NULL;
     }
     return NULL;
 }

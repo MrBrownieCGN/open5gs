@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import shutil
 from pathlib import Path
 
@@ -1349,6 +1350,60 @@ def _inline_array_json_type(item_lines, current_file, all_schemas):
     return "array"
 
 
+def _inline_array_items_schema(item_lines, current_file, all_schemas):
+    """
+    Schema referenced by items.$ref of an inline array item, or None.
+    Only meaningful once _inline_array_json_type() returned "array".
+    """
+    items_ref = _find_items_ref_in_lines(item_lines)
+    if items_ref is None:
+        return None
+    result = _resolve_ref_to_schema(items_ref, current_file, all_schemas)
+    if result is None:
+        return None
+    return result[1]
+
+
+_UNION_MEMBER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _union_array_members(item_schemas):
+    """
+    For array alternatives that share the JSON type "array", find for
+    each item schema a required property that no other item schema
+    has as a property, so that an element tells the alternative apart
+    (e.g. kasme, ck, ckPrime for AvEpsAka, AvImsGbaEapAka and
+    AvEapAkaPrime in HssAuthenticationVectors). The first such
+    property in the order of the required list is taken.
+    Returns the list of property names, or None if any item schema
+    has none.
+    """
+    members = []
+    for n, schema in enumerate(item_schemas):
+        if not isinstance(schema, dict):
+            return None
+        props = schema.get("properties")
+        required = schema.get("required")
+        if not isinstance(props, dict) or not isinstance(required, list):
+            return None
+        others = set()
+        for m, other in enumerate(item_schemas):
+            if m != n and isinstance(other, dict) \
+                    and isinstance(other.get("properties"), dict):
+                others.update(other["properties"].keys())
+        member = None
+        for name in required:
+            if (isinstance(name, str) and name in props
+                    and name not in others
+                    and _UNION_MEMBER_NAME.match(name)):
+                member = name
+                break
+        if member is None:
+            return None
+        members.append(member)
+    return members
+
+
 def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
                                     eol="\n"):
     """
@@ -1367,9 +1422,17 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
     member by JSON type when parsing, so the wire format follows the
     oneOf (#4771). At most one alternative may also accept JSON null.
     All-$ref unions such as Av5gAka | EapPayload are supported too.
+
+    Several arrays of models may share the JSON type "array" when the
+    elements tell them apart: each item schema needs a required
+    property that no other item schema has (_union_array_members()).
+    Each such array property then carries
+    x-open5gs-union-member: <property>, and the generated model picks
+    the array whose elements all are objects with that property
+    (HssAuthenticationVectors, TS 29.503 clause 6.3.6.2.12).
+
     Otherwise the plain wrapper object is generated for mixed items and
-    reported as a warning; items sharing a JSON type (e.g. several
-    arrays) would need item-level matching to be told apart.
+    reported as a warning.
 
     Skips "array or single object" patterns where an inline array's
     items.$ref and a sibling $ref point to the same schema
@@ -1477,6 +1540,7 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
     prop_entries = []
     prop_names_seen = set()
     json_types = []
+    item_schemas = []
     nullable_count = 0
 
     for item in items:
@@ -1505,6 +1569,7 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
                 ref_val, current_file, all_schemas)
             if resolved is not None and resolved[1].get("nullable"):
                 nullable_count += 1
+            item_schemas.append(None)
 
         elif first == "- type: array":
             # Inline array -> derive name from items.$ref
@@ -1543,6 +1608,8 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
             has_inline_item = True
             json_types.append(
                 _inline_array_json_type(item, current_file, all_schemas))
+            item_schemas.append(
+                _inline_array_items_schema(item, current_file, all_schemas))
 
         elif first == "- type: object":
             # Inline object -> not supported, skip
@@ -1573,9 +1640,18 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
     if ref_targets & array_items_targets:
         return None
 
-    # --- Union at JSON level only if the items differ by JSON type ---
+    # --- Union at JSON level only if the items differ by JSON type, ---
+    # --- or are arrays told apart by a required member of the items ---
+    array_idx = [n for n, t in enumerate(json_types) if t == "array"]
+    other_types = [t for t in json_types if t != "array"]
+    union_members = {}
+    if len(array_idx) > 1:
+        members = _union_array_members([item_schemas[n] for n in array_idx])
+        if members is not None:
+            union_members = dict(zip(array_idx, members))
     is_union = (None not in json_types
-                and len(set(json_types)) == len(json_types)
+                and len(set(other_types)) == len(other_types)
+                and (len(array_idx) <= 1 or bool(union_members))
                 and nullable_count <= 1)
     if not has_inline_item and not is_union:
         return None
@@ -1656,9 +1732,12 @@ def try_transform_category_i_mixed(lines, start_idx, all_schemas, current_file,
         out.append(" " * oneof_indent + "x-open5gs-union: true" + eol)
     out.append(" " * oneof_indent + "properties:" + eol)
     prop_indent = oneof_indent + 2
-    for prop_name, value_lines in prop_entries:
+    for n, (prop_name, value_lines) in enumerate(prop_entries):
         out.append(" " * prop_indent + prop_name + ":" + eol)
         out.extend(value_lines)
+        if is_union and n in union_members:
+            out.append(" " * (prop_indent + 2) + "x-open5gs-union-member: "
+                       + union_members[n] + eol)
 
     return out, disc_end
 

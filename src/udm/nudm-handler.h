@@ -30,6 +30,11 @@ bool udm_nudm_ueau_handle_get(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg);
 bool udm_nudm_ueau_handle_result_confirmation_inform(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *message);
+bool udm_nudm_ueau_handle_get_hss_av(
+    udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg);
+void udm_nudm_ueau_hss_av_start_next(udm_ue_t *udm_ue);
+void udm_nudm_ueau_hss_av_finish_head(udm_ue_t *udm_ue);
+void udm_nudm_ueau_hss_av_expire_head(udm_ue_t *udm_ue);
 
 bool udm_nudm_uecm_handle_amf_registration(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *message);

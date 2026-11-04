@@ -110,7 +110,6 @@ static int udm_sbi_discover_and_send(
 
     ogs_assert(service_name);
     ogs_assert(sbi_object);
-    ogs_assert(stream);
     ogs_assert(build);
 
     ogs_assert(sbi_object_id >= OGS_MIN_POOL_ID &&
@@ -126,6 +125,10 @@ static int udm_sbi_discover_and_send(
 
     xact->state = state;
 
+    /*
+     * Without a stream the transaction is not associated with a
+     * request of a consumer; the caller answers the consumer itself.
+     */
     if (stream) {
         xact->assoc_stream_id = ogs_sbi_id_from_stream(stream);
         ogs_assert(xact->assoc_stream_id >= OGS_MIN_POOL_ID &&
@@ -157,10 +160,11 @@ int udm_ue_sbi_discover_and_send(
             (ogs_sbi_build_f)build, udm_ue, stream, state, data);
     if (r != OGS_OK) {
         ogs_error("udm_ue_sbi_discover_and_send() failed");
-        ogs_assert(true ==
-            ogs_sbi_server_send_error(stream,
-                OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL,
-                "Cannot discover", udm_ue->suci, NULL));
+        if (stream)
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL,
+                    "Cannot discover", udm_ue->suci, NULL));
         return r;
     }
 

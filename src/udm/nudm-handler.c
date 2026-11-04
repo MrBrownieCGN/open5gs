@@ -267,6 +267,233 @@ bool udm_nudm_ueau_handle_result_confirmation_inform(
     return true;
 }
 
+/*
+ * Nudm_UEAU GetHssAv, TS 29.503 clause 5.4.2.4:
+ *
+ *   POST {apiRoot}/nudm-ueau/v1/{supi}/hss-security-information/
+ *        {hssAuthType}/generate-av
+ *
+ * The SUPI format and the resource path are checked in udm-sm.c before
+ * a UE context is looked up or created.
+ *
+ * Only IMS-AKA is served. Any other hssAuthType, also one this version
+ * does not know (HssAuthTypeInUri is extensible), is answered with
+ * "501 Not Implemented" and the application error
+ * UNSUPPORTED_AUTHENTICATION_METHOD (table 6.3.3.5.4.2.2-2).
+ *
+ * Intentionally out of scope: EPS-AKA (needs KASME and servingNetworkId),
+ * EAP-AKA, EAP-AKA' (needs anId) and GBA-AKA.
+ */
+bool udm_nudm_ueau_handle_get_hss_av(
+    udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
+{
+    OpenAPI_hss_authentication_info_request_t *HssAuthenticationInfoRequest;
+    OpenAPI_resynchronization_info_t *ResynchronizationInfo = NULL;
+    OpenAPI_hss_auth_type_in_uri_e hss_auth_type_in_uri;
+    udm_hss_av_request_t *request = NULL;
+    uint8_t rand[OGS_RAND_LEN];
+    uint8_t auts[OGS_AUTS_LEN];
+
+    ogs_assert(udm_ue);
+    ogs_assert(stream);
+    ogs_assert(recvmsg);
+
+    hss_auth_type_in_uri = OpenAPI_hss_auth_type_in_uri_FromString(
+            recvmsg->h.resource.component[2]);
+    switch (hss_auth_type_in_uri) {
+    case OpenAPI_hss_auth_type_in_uri_ims_aka:
+        break;
+    default:
+        ogs_error("[%s] Not implemented hssAuthType [%s]",
+                udm_ue->supi, recvmsg->h.resource.component[2]);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_NOT_IMPLEMENTED,
+                recvmsg, "Not implemented hssAuthType",
+                recvmsg->h.resource.component[2],
+                OGS_SBI_APP_STRERROR_UNSUPPORTED_AUTHENTICATION_METHOD));
+        return false;
+    }
+
+    HssAuthenticationInfoRequest = recvmsg->HssAuthenticationInfoRequest;
+    if (!HssAuthenticationInfoRequest) {
+        ogs_error("[%s] No HssAuthenticationInfoRequest", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "No HssAuthenticationInfoRequest", udm_ue->supi,
+                NULL));
+        return false;
+    }
+
+    /* The method in the body has to match the type of AV in the URI */
+    if (HssAuthenticationInfoRequest->hss_auth_type !=
+            OpenAPI_hss_auth_type_IMS_AKA) {
+        ogs_error("[%s] hssAuthType [%s] does not match URI [%s]",
+                udm_ue->supi,
+                OpenAPI_hss_auth_type_ToString(
+                    HssAuthenticationInfoRequest->hss_auth_type),
+                recvmsg->h.resource.component[2]);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "hssAuthType does not match URI",
+                recvmsg->h.resource.component[2], NULL));
+        return false;
+    }
+
+    /*
+     * NumOfRequestedVectors: "minimum: 1 maximum: 5" (clause 6.3.6.3.2).
+     * A value out of range is rejected, not clamped.
+     */
+    if (HssAuthenticationInfoRequest->num_of_requested_vectors < 1 ||
+        HssAuthenticationInfoRequest->num_of_requested_vectors >
+            OGS_SBI_MAX_NUM_OF_HSS_AV) {
+        ogs_error("[%s] Invalid numOfRequestedVectors [%d]",
+                udm_ue->supi,
+                HssAuthenticationInfoRequest->num_of_requested_vectors);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "Invalid numOfRequestedVectors", udm_ue->supi,
+                NULL));
+        return false;
+    }
+
+    ResynchronizationInfo =
+        HssAuthenticationInfoRequest->resynchronization_info;
+    if (ResynchronizationInfo) {
+        if (ogs_hex_from_string_checked(ResynchronizationInfo->rand,
+                    rand, sizeof(rand)) != OGS_OK) {
+            ogs_error("[%s] Invalid RAND", udm_ue->supi);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                    recvmsg, "Invalid RAND", udm_ue->supi, NULL));
+            return false;
+        }
+        if (ogs_hex_from_string_checked(ResynchronizationInfo->auts,
+                    auts, sizeof(auts)) != OGS_OK) {
+            ogs_error("[%s] Invalid AUTS", udm_ue->supi);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                    recvmsg, "Invalid AUTS", udm_ue->supi, NULL));
+            return false;
+        }
+    }
+
+    request = udm_hss_av_request_add(udm_ue, stream);
+    if (!request) {
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                recvmsg, "Cannot allocate GetHssAv request", udm_ue->supi,
+                NULL));
+        return false;
+    }
+
+    request->num_of_requested_vectors =
+        HssAuthenticationInfoRequest->num_of_requested_vectors;
+    if (ResynchronizationInfo) {
+        request->resync_requested = true;
+        memcpy(request->resync_rand, rand, sizeof(rand));
+        memcpy(request->resync_auts, auts, sizeof(auts));
+    }
+
+    /*
+     * Requests of the same SUPI are served in arrival order. A request
+     * behind the head is started by udm_nudm_ueau_hss_av_finish_head().
+     */
+    if (udm_hss_av_request_head(udm_ue) == request)
+        udm_nudm_ueau_hss_av_start_next(udm_ue);
+
+    return true;
+}
+
+/*
+ * Start the GetHssAv request at the head of udm_ue->hss_av_request_list:
+ * read the authentication subscription from the UDR. Requests whose
+ * consumer has gone in the meantime are dropped.
+ *
+ * The UDR transaction is not associated with the stream of the
+ * consumer. An associated transaction is removed, together with its
+ * CLIENT_WAIT timer, when the consumer resets its stream or closes the
+ * connection (stream_remove_xact_all() in lib/sbi/nghttp2-server.c);
+ * the head would then never be released and every later request of the
+ * SUPI would wait forever. Without the association the UDR answer or
+ * the timer always arrives, and the consumer is found again through
+ * udm_hss_av_request_t.stream_id.
+ */
+void udm_nudm_ueau_hss_av_start_next(udm_ue_t *udm_ue)
+{
+    udm_hss_av_request_t *request = NULL;
+    ogs_sbi_stream_t *stream = NULL;
+    int r;
+
+    ogs_assert(udm_ue);
+
+    while ((request = udm_hss_av_request_head(udm_ue))) {
+        stream = ogs_sbi_stream_find_by_id(request->stream_id);
+        if (!stream) {
+            ogs_warn("[%s] GetHssAv consumer has gone [%d]",
+                    udm_ue->supi, request->stream_id);
+            udm_hss_av_request_remove(udm_ue, request);
+            continue;
+        }
+
+        r = udm_ue_sbi_discover_and_send(OpenAPI_service_name_nudr_dr, NULL,
+                udm_nudr_dr_build_authentication_subscription,
+                udm_ue, NULL, UDM_SBI_UE_HSS_AV, NULL);
+        if (r == OGS_OK)
+            return;
+
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL,
+                "Cannot reach UDR", udm_ue->supi, NULL));
+        udm_hss_av_request_remove(udm_ue, request);
+    }
+}
+
+/*
+ * The request at the head of udm_ue->hss_av_request_list has been
+ * answered (vectors, error, or timeout): release it and start the next.
+ */
+void udm_nudm_ueau_hss_av_finish_head(udm_ue_t *udm_ue)
+{
+    udm_hss_av_request_t *request = NULL;
+
+    ogs_assert(udm_ue);
+
+    request = udm_hss_av_request_head(udm_ue);
+    if (request)
+        udm_hss_av_request_remove(udm_ue, request);
+
+    udm_nudm_ueau_hss_av_start_next(udm_ue);
+}
+
+/*
+ * The UDR has not answered the request at the head within CLIENT_WAIT:
+ * answer the consumer and go on with the next request.
+ */
+void udm_nudm_ueau_hss_av_expire_head(udm_ue_t *udm_ue)
+{
+    udm_hss_av_request_t *request = NULL;
+    ogs_sbi_stream_t *stream = NULL;
+
+    ogs_assert(udm_ue);
+
+    request = udm_hss_av_request_head(udm_ue);
+    if (request) {
+        stream = ogs_sbi_stream_find_by_id(request->stream_id);
+        if (stream)
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL,
+                    "No answer from UDR", udm_ue->supi, NULL));
+    }
+
+    udm_nudm_ueau_hss_av_finish_head(udm_ue);
+}
+
 bool udm_nudm_uecm_handle_amf_registration(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *message)
 {

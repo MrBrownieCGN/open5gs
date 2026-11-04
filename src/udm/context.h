@@ -75,7 +75,47 @@ struct udm_ue_s {
 
     ogs_list_t sess_list;
     ogs_list_t sdm_subscription_list;
+
+    /*
+     * Pending Nudm_UEAU GetHssAv requests (TS 29.503 clause 5.4.2.4) in
+     * arrival order. Only the head talks to the UDR; see
+     * udm_hss_av_request_t.
+     */
+    ogs_list_t hss_av_request_list;
 };
+
+/*
+ * One GetHssAv request of an NF service consumer (HSS).
+ *
+ * Every request reads the SQN from the UDR and writes the advanced
+ * SQN back before the vectors are returned. Two requests for the same
+ * SUPI that overlap would read the same SQN and hand out the same SQN
+ * range twice, so the requests of one SUPI are served one after the
+ * other in arrival order: only the head of udm_ue->hss_av_request_list
+ * has a transaction towards the UDR, the others wait until it has been
+ * answered.
+ *
+ * The keys and the SQN are kept here, not in udm_ue->k/opc/amf/sqn/rand,
+ * so that a GetHssAv never overwrites the state of a 5G-AKA procedure
+ * of the same UE (the AUSF re-synchronisation compares udm_ue->rand).
+ */
+typedef struct udm_hss_av_request_s {
+    ogs_lnode_t lnode;
+
+    /* Stream of the consumer; the UDR transactions are not associated */
+    ogs_pool_id_t stream_id;
+
+    int num_of_requested_vectors;
+
+    bool resync_requested;
+    uint8_t resync_rand[OGS_RAND_LEN];
+    uint8_t resync_auts[OGS_AUTS_LEN];
+
+    uint8_t k[OGS_KEY_LEN];
+    uint8_t opc[OGS_KEY_LEN];
+    uint8_t amf[OGS_AMF_LEN];
+    uint64_t first_sqn;
+} udm_hss_av_request_t;
 
 struct udm_sess_s {
     ogs_sbi_object_t sbi;
@@ -126,6 +166,15 @@ udm_sdm_subscription_t *udm_sdm_subscription_add(udm_ue_t *udm_ue);
 void udm_sdm_subscription_remove(udm_sdm_subscription_t *subscription);
 void udm_sdm_subscription_remove_all(udm_ue_t *udm_ue);
 udm_sdm_subscription_t *udm_sdm_subscription_find_by_id(char *id);
+
+udm_hss_av_request_t *udm_hss_av_request_add(
+        udm_ue_t *udm_ue, ogs_sbi_stream_t *stream);
+void udm_hss_av_request_remove(
+        udm_ue_t *udm_ue, udm_hss_av_request_t *request);
+void udm_hss_av_request_abort_all(udm_ue_t *udm_ue);
+udm_hss_av_request_t *udm_hss_av_request_head(udm_ue_t *udm_ue);
+
+bool udm_ue_is_unused(udm_ue_t *udm_ue);
 
 int get_ue_load(void);
 

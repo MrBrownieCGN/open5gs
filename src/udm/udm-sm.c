@@ -19,6 +19,49 @@
 
 #include "sbi-path.h"
 #include "nnrf-handler.h"
+#include "nudm-handler.h"
+
+/*
+ * GetHssAv keeps no state in the UE context (see udm_ue_is_unused()).
+ * After an event of a GetHssAv has been handled, a UE context that no
+ * procedure uses any more is released here, in the same place where a
+ * UE context in udm_ue_state_exception is released. This is the normal
+ * end of the request, not an exception of the UE state machine.
+ */
+static void release_ue_after_hss_av(udm_ue_t *udm_ue)
+{
+    ogs_assert(udm_ue);
+
+    if (udm_ue_is_unused(udm_ue) == false)
+        return;
+
+    ogs_debug("[%s] Release UE context after GetHssAv", udm_ue->supi);
+    udm_ue_remove(udm_ue);
+}
+
+/*
+ * GetHssAv, /{supi}/hss-security-information/{hssAuthType}/generate-av:
+ * checked before a UE context is looked up or created, so that a
+ * malformed request neither de-conceals a SUCI nor takes a UE context.
+ * Table 6.3.3.5.2-1 of TS 29.503: "On this resource, only the IMSI
+ * format of SUPI is used". Returns NULL or the reason for 400.
+ */
+static const char *hss_av_check_resource(ogs_sbi_message_t *message)
+{
+    ogs_assert(message);
+
+    if (strncmp(message->h.resource.component[0],
+            OGS_ID_SUPI_TYPE_IMSI "-", strlen(OGS_ID_SUPI_TYPE_IMSI "-")))
+        return "SUPI is not in IMSI format";
+    if (!message->h.resource.component[2])
+        return "No hssAuthType";
+    if (!message->h.resource.component[3] ||
+        strcmp(message->h.resource.component[3],
+            OGS_SBI_RESOURCE_NAME_GENERATE_AV))
+        return "Invalid resource name";
+
+    return NULL;
+}
 
 void udm_state_initial(ogs_fsm_t *s, udm_event_t *e)
 {
@@ -179,6 +222,23 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
                 END
             }
 
+            if (service_name_id == OpenAPI_service_name_nudm_ueau &&
+                message.h.resource.component[1] &&
+                !strcmp(message.h.resource.component[1],
+                    OGS_SBI_RESOURCE_NAME_HSS_SECURITY_INFORMATION)) {
+                const char *reason = hss_av_check_resource(&message);
+                if (reason) {
+                    ogs_error("[%s] %s",
+                            message.h.resource.component[0], reason);
+                    ogs_assert(true ==
+                        ogs_sbi_server_send_error(stream,
+                            OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                            &message, reason,
+                            message.h.resource.component[0], NULL));
+                    break;
+                }
+            }
+
             if (!udm_ue) {
                 supi = ogs_supi_from_supi_or_suci(
                     message.h.resource.component[0]);
@@ -285,6 +345,12 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
                 if (OGS_FSM_CHECK(&udm_ue->sm, udm_ue_state_exception)) {
                     ogs_error("[%s] State machine exception", udm_ue->suci);
                     udm_ue_remove(udm_ue);
+                } else if (service_name_id ==
+                            OpenAPI_service_name_nudm_ueau &&
+                        message.h.resource.component[1] &&
+                        !strcmp(message.h.resource.component[1],
+                        OGS_SBI_RESOURCE_NAME_HSS_SECURITY_INFORMATION)) {
+                    release_ue_after_hss_av(udm_ue);
                 }
             END
             break;
@@ -529,6 +595,8 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
                     if (OGS_FSM_CHECK(&udm_ue->sm, udm_ue_state_exception)) {
                         ogs_warn("[%s] State machine exception", udm_ue->suci);
                         udm_ue_remove(udm_ue);
+                    } else if (e->h.sbi.state == UDM_SBI_UE_HSS_AV) {
+                        release_ue_after_hss_av(udm_ue);
                     }
                 END
                 break;
@@ -651,6 +719,26 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
             if (!sbi_xact) {
                 ogs_error("SBI transaction has already been removed [%d]",
                         sbi_xact_id);
+                break;
+            }
+
+            /*
+             * A GetHssAv waiting for the UDR. Its transaction has no
+             * associated stream (see udm_nudm_ueau_hss_av_start_next()).
+             */
+            if (sbi_xact->state == UDM_SBI_UE_HSS_AV) {
+                udm_ue_id = sbi_xact->sbi_object_id;
+                ogs_sbi_xact_remove(sbi_xact);
+
+                ogs_error("Cannot receive SBI message (GetHssAv)");
+
+                udm_ue = udm_ue_find_by_id(udm_ue_id);
+                if (!udm_ue) {
+                    ogs_error("UE Context has already been removed");
+                    break;
+                }
+                udm_nudm_ueau_hss_av_expire_head(udm_ue);
+                release_ue_after_hss_av(udm_ue);
                 break;
             }
 

@@ -225,6 +225,7 @@ void udm_ue_remove(udm_ue_t *udm_ue)
 
     udm_sess_remove_all(udm_ue);
     udm_sdm_subscription_remove_all(udm_ue);
+    udm_hss_av_request_abort_all(udm_ue);
 
     OpenAPI_auth_event_free(udm_ue->auth_event);
     OpenAPI_amf3_gpp_access_registration_free(
@@ -442,6 +443,104 @@ udm_sdm_subscription_t *udm_sdm_subscription_find_by_id(char *id)
     ogs_assert(id);
     return (udm_sdm_subscription_t *)ogs_hash_get(self.sdm_subscription_id_hash,
             id, strlen(id));
+}
+
+udm_hss_av_request_t *udm_hss_av_request_add(
+        udm_ue_t *udm_ue, ogs_sbi_stream_t *stream)
+{
+    udm_hss_av_request_t *request = NULL;
+
+    ogs_assert(udm_ue);
+    ogs_assert(stream);
+
+    request = ogs_calloc(1, sizeof(*request));
+    if (!request) {
+        ogs_error("[%s] ogs_calloc() failed", udm_ue->supi);
+        return NULL;
+    }
+
+    request->stream_id = ogs_sbi_id_from_stream(stream);
+    ogs_assert(request->stream_id >= OGS_MIN_POOL_ID &&
+            request->stream_id <= OGS_MAX_POOL_ID);
+
+    ogs_list_add(&udm_ue->hss_av_request_list, request);
+
+    return request;
+}
+
+void udm_hss_av_request_remove(
+        udm_ue_t *udm_ue, udm_hss_av_request_t *request)
+{
+    ogs_assert(udm_ue);
+    ogs_assert(request);
+
+    ogs_list_remove(&udm_ue->hss_av_request_list, request);
+
+    memset(request->k, 0, sizeof(request->k));
+    memset(request->opc, 0, sizeof(request->opc));
+    ogs_free(request);
+}
+
+/*
+ * The UE context goes away while GetHssAv requests are still pending
+ * (another procedure of the SUPI failed, see udm_ue_remove()). Answer
+ * the consumers now instead of leaving their streams open until their
+ * own timers expire, and release the requests. The transaction of the
+ * head towards the UDR is removed by udm_ue_remove().
+ */
+void udm_hss_av_request_abort_all(udm_ue_t *udm_ue)
+{
+    udm_hss_av_request_t *request = NULL, *next_request = NULL;
+    ogs_sbi_stream_t *stream = NULL;
+
+    ogs_assert(udm_ue);
+
+    ogs_list_for_each_safe(
+            &udm_ue->hss_av_request_list, next_request, request) {
+        stream = ogs_sbi_stream_find_by_id(request->stream_id);
+        if (stream)
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL,
+                    "UE context removed", udm_ue->supi, NULL));
+
+        udm_hss_av_request_remove(udm_ue, request);
+    }
+}
+
+udm_hss_av_request_t *udm_hss_av_request_head(udm_ue_t *udm_ue)
+{
+    ogs_assert(udm_ue);
+    return ogs_list_first(&udm_ue->hss_av_request_list);
+}
+
+/*
+ * A GetHssAv keeps no state in the UE context once it has been
+ * answered, but udm-sm.c creates a UE context for every request of an
+ * unknown SUPI. Such a context is released again when no procedure
+ * uses it, so that GetHssAv requests for many SUPIs, or for unknown
+ * SUPIs, do not use up the UE pool.
+ *
+ * "Used" means: a request or transaction is pending (its answer or
+ * timer looks the context up), or a 5G procedure has left state in
+ * it: authentication (5G-AKA vector, auth-events), UECM registration,
+ * SMF registrations or SDM subscriptions.
+ */
+bool udm_ue_is_unused(udm_ue_t *udm_ue)
+{
+    ogs_assert(udm_ue);
+
+    return ogs_list_empty(&udm_ue->hss_av_request_list) &&
+        ogs_list_empty(&udm_ue->sbi.xact_list) &&
+        ogs_list_empty(&udm_ue->sess_list) &&
+        ogs_list_empty(&udm_ue->sdm_subscription_list) &&
+        udm_ue->auth_type == OpenAPI_auth_type_NULL &&
+        !udm_ue->serving_network_name &&
+        !udm_ue->ausf_instance_id &&
+        !udm_ue->auth_event &&
+        !udm_ue->amf_3gpp_access_registration &&
+        !udm_ue->amf_instance_id &&
+        !udm_ue->dereg_callback_uri;
 }
 
 int get_ue_load(void)

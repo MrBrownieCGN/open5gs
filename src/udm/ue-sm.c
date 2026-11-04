@@ -82,6 +82,9 @@ void udm_ue_state_operational(ogs_fsm_t *s, udm_event_t *e)
                 CASE(OGS_SBI_RESOURCE_NAME_SECURITY_INFORMATION)
                     udm_nudm_ueau_handle_get(udm_ue, stream, message);
                     break;
+                CASE(OGS_SBI_RESOURCE_NAME_HSS_SECURITY_INFORMATION)
+                    udm_nudm_ueau_handle_get_hss_av(udm_ue, stream, message);
+                    break;
                 CASE(OGS_SBI_RESOURCE_NAME_AUTH_EVENTS)
                     udm_nudm_ueau_handle_result_confirmation_inform(
                             udm_ue, stream, message);
@@ -325,6 +328,16 @@ void udm_ue_state_operational(ogs_fsm_t *s, udm_event_t *e)
 
         udm_ue = udm_ue_find_by_id(e->udm_ue_id);
         ogs_assert(udm_ue);
+
+        /*
+         * GetHssAv: the UDR transaction has no associated stream
+         * (see udm_nudm_ueau_hss_av_start_next()); the consumer is
+         * found through the head of udm_ue->hss_av_request_list.
+         */
+        if (e->h.sbi.state == UDM_SBI_UE_HSS_AV) {
+            udm_nudr_dr_handle_hss_authentication(udm_ue, message);
+            break;
+        }
 
         stream_id = OGS_POINTER_TO_UINT(e->h.sbi.data);
         ogs_assert(stream_id >= OGS_MIN_POOL_ID &&

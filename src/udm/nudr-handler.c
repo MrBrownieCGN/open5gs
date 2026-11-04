@@ -18,6 +18,7 @@
  */
 
 #include "nudr-handler.h"
+#include "nudm-handler.h"
 #include "sbi-path.h"
 
 bool udm_nudr_dr_handle_subscription_authentication(
@@ -386,6 +387,399 @@ bool udm_nudr_dr_handle_subscription_authentication(
     END
 
     return true;
+}
+
+/*
+ * GetHssAv: an error of the UDR is not an error of the request of the
+ * consumer. 5xx of the UDR are passed on, anything else becomes 500.
+ */
+static void hss_av_send_udr_error(udm_ue_t *udm_ue,
+        ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
+{
+    int status = recvmsg->res_status;
+
+    ogs_error("[%s] HTTP response error from UDR [%d]",
+            udm_ue->supi, recvmsg->res_status);
+
+    if (status < OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR)
+        status = OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR;
+
+    ogs_assert(true ==
+        ogs_sbi_server_send_error(stream, status, recvmsg,
+            "HTTP response error from UDR", udm_ue->supi,
+            (recvmsg->ProblemDetails) ?
+                    recvmsg->ProblemDetails->cause : NULL));
+}
+
+/*
+ * GetHssAv: take K, OPc, AMF and the SQN of the subscription into the
+ * request. Returns NULL, or the name of the attribute that is missing
+ * or malformed; the UDR handed out data that cannot be used, which is
+ * an internal error of the UDM (500), not one of the consumer.
+ */
+static const char *hss_av_take_credentials(udm_hss_av_request_t *request,
+        OpenAPI_authentication_subscription_t *AuthenticationSubscription)
+{
+    uint8_t sqn[OGS_SQN_LEN];
+
+    ogs_assert(request);
+    ogs_assert(AuthenticationSubscription);
+
+    if (ogs_hex_from_string_checked(
+                AuthenticationSubscription->enc_permanent_key,
+                request->k, sizeof(request->k)) != OGS_OK)
+        return "encPermanentKey";
+    if (ogs_hex_from_string_checked(
+                AuthenticationSubscription->enc_opc_key,
+                request->opc, sizeof(request->opc)) != OGS_OK)
+        return "encOpcKey";
+    if (ogs_hex_from_string_checked(
+                AuthenticationSubscription->authentication_management_field,
+                request->amf, sizeof(request->amf)) != OGS_OK)
+        return "authenticationManagementField";
+    if (!AuthenticationSubscription->sequence_number ||
+        ogs_hex_from_string_checked(
+                AuthenticationSubscription->sequence_number->sqn,
+                sqn, sizeof(sqn)) != OGS_OK)
+        return "sequenceNumber.sqn";
+
+    request->first_sqn = ogs_buffer_to_uint64(sqn, OGS_SQN_LEN);
+
+    return NULL;
+}
+
+/*
+ * GetHssAv (TS 29.503 clause 5.4.2.4), answer from the UDR to the GET of
+ * the authentication subscription: check the credentials, settle the
+ * SQN of the first vector (with AUTS re-synchronisation if requested)
+ * and write the SQN that follows the last vector back to the UDR.
+ *
+ * The SQN is stored before any vector leaves the UDM. If the UDR
+ * cannot store it, no vector is returned, so a GetHssAv never hands
+ * out an SQN twice. This holds against the other GetHssAv of the same
+ * SUPI in this UDM (they are serialised, see udm_hss_av_request_t); it
+ * does not cover the 5G-AKA procedure, the Cx MAR of the Open5GS HSS,
+ * or other UDM instances, which read and write the same SQN without a
+ * common lock.
+ */
+static bool hss_av_handle_authentication_subscription(
+        udm_ue_t *udm_ue, udm_hss_av_request_t *request,
+        ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
+{
+    OpenAPI_authentication_subscription_t *AuthenticationSubscription;
+    const char *invalid = NULL;
+    uint8_t next_sqn_buf[OGS_SQN_LEN];
+    uint8_t sqn_ms[OGS_SQN_LEN];
+    uint8_t mac_s[OGS_MAC_S_LEN];
+    uint64_t next_sqn;
+    int r;
+
+    ogs_assert(udm_ue);
+    ogs_assert(request);
+    ogs_assert(stream);
+    ogs_assert(recvmsg);
+
+    switch (recvmsg->res_status) {
+    case OGS_SBI_HTTP_STATUS_OK:
+        break;
+    case OGS_SBI_HTTP_STATUS_NOT_FOUND:
+        /* Figure 5.4.2.4.2-1 step 2c */
+        ogs_warn("[%s] User not found", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_NOT_FOUND, recvmsg,
+                "User not found", udm_ue->supi,
+                OGS_SBI_APP_STRERROR_USER_NOT_FOUND));
+        return false;
+    default:
+        hss_av_send_udr_error(udm_ue, stream, recvmsg);
+        return false;
+    }
+
+    AuthenticationSubscription = recvmsg->AuthenticationSubscription;
+    if (!AuthenticationSubscription) {
+        ogs_error("[%s] No AuthenticationSubscription", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR, recvmsg,
+                "No AuthenticationSubscription", udm_ue->supi, NULL));
+        return false;
+    }
+
+    /*
+     * IMS-AKA runs the AKA functions on the permanent key K and OPc of
+     * the subscription; an authentication method without them cannot
+     * give IMS-AKA vectors (figure 5.4.2.4.2-1 step 2b). 5G-AKA and
+     * EAP-AKA' subscriptions both carry K and OPc in the
+     * AuthenticationSubscription of the UDR.
+     */
+    switch (AuthenticationSubscription->authentication_method) {
+    case OpenAPI_auth_method_5G_AKA:
+    case OpenAPI_auth_method_EAP_AKA_PRIME:
+        break;
+    default:
+        ogs_error("[%s] No AKA subscription [%s]", udm_ue->supi,
+                OpenAPI_auth_method_ToString(
+                    AuthenticationSubscription->authentication_method));
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_FORBIDDEN, recvmsg,
+                "No AKA subscription", udm_ue->supi,
+                OGS_SBI_APP_STRERROR_AUTHENTICATION_REJECTED));
+        return false;
+    }
+
+    invalid = hss_av_take_credentials(request, AuthenticationSubscription);
+    if (invalid) {
+        ogs_error("[%s] Invalid %s", udm_ue->supi, invalid);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR, recvmsg,
+                "Invalid authentication subscription", invalid, NULL));
+        return false;
+    }
+
+    if (request->resync_requested) {
+        /*
+         * TS 33.203 clause 6.1.0: "The requirements on the handling of
+         * the counters and mechanisms for sequence number management are
+         * specified in TS 33.102". MAC-S authenticates SQN_MS against
+         * the RAND given by the consumer, so no RAND has to be kept in
+         * the UDM between two GetHssAv requests.
+         */
+        ogs_auc_sqn(request->opc, request->k,
+                request->resync_rand, request->resync_auts, sqn_ms, mac_s);
+        if (memcmp(request->resync_auts + OGS_SQN_LEN,
+                    mac_s, OGS_MAC_S_LEN) != 0) {
+            ogs_error("[%s] Re-synch MAC failed", udm_ue->supi);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_FORBIDDEN, recvmsg,
+                    "Re-sync MAC failed", udm_ue->supi,
+                    OGS_SBI_APP_STRERROR_AUTHENTICATION_REJECTED));
+            return false;
+        }
+
+        /*
+         * Same SQN after re-synchronisation as the 5G-AKA path in
+         * udm_nudm_ueau_handle_get(): SQN_MS + 32 + 1.
+         */
+        request->first_sqn = (ogs_buffer_to_uint64(sqn_ms, OGS_SQN_LEN) +
+                32 + 1) & OGS_MAX_SQN;
+    }
+
+    /*
+     * Vector i uses SQN + 32 * i, the step of the 5G-AKA path. The UDR
+     * is told the SQN that follows the last vector, i.e. the next SQN
+     * that may be used. A UDR that stores the value as given, and the
+     * Open5GS UDR that adds another 32 after the replace, both keep the
+     * SQN in the UDR above every SQN handed out here.
+     */
+    next_sqn = (request->first_sqn +
+            32 * (uint64_t)request->num_of_requested_vectors) & OGS_MAX_SQN;
+    ogs_uint64_to_buffer(next_sqn, OGS_SQN_LEN, next_sqn_buf);
+
+    r = udm_ue_sbi_discover_and_send(OpenAPI_service_name_nudr_dr, NULL,
+            udm_nudr_dr_build_authentication_subscription,
+            udm_ue, NULL, UDM_SBI_UE_HSS_AV, next_sqn_buf);
+    if (r != OGS_OK) {
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, recvmsg,
+                "Cannot store SQN in UDR", udm_ue->supi, NULL));
+        return false;
+    }
+
+    return true;
+}
+
+/*
+ * GetHssAv, answer from the UDR to the PATCH of the SQN: build the
+ * IMS-AKA vectors and return them to the consumer.
+ */
+static void hss_av_send_vectors(
+        udm_ue_t *udm_ue, udm_hss_av_request_t *request,
+        ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
+{
+    ogs_sbi_message_t sendmsg;
+    ogs_sbi_response_t *response = NULL;
+
+    OpenAPI_hss_authentication_info_result_t *HssAuthenticationInfoResult;
+    OpenAPI_list_t *AvList = NULL;
+    OpenAPI_av_ims_gba_eap_aka_t *Av = NULL;
+
+    uint8_t amf[OGS_AMF_LEN];
+    uint8_t sqn[OGS_SQN_LEN];
+    uint8_t rand[OGS_RAND_LEN];
+    uint8_t autn[OGS_AUTN_LEN];
+    uint8_t ik[OGS_KEY_LEN];
+    uint8_t ck[OGS_KEY_LEN];
+    uint8_t ak[OGS_AK_LEN];
+    uint8_t xres[OGS_MAX_RES_LEN];
+    size_t xres_len;
+
+    char rand_string[OGS_KEYSTRLEN(OGS_RAND_LEN)];
+    char xres_string[OGS_KEYSTRLEN(OGS_MAX_RES_LEN)];
+    char autn_string[OGS_KEYSTRLEN(OGS_AUTN_LEN)];
+    char ck_string[OGS_KEYSTRLEN(OGS_KEY_LEN)];
+    char ik_string[OGS_KEYSTRLEN(OGS_KEY_LEN)];
+
+    int i;
+
+    ogs_assert(udm_ue);
+    ogs_assert(request);
+    ogs_assert(stream);
+    ogs_assert(recvmsg);
+
+    switch (recvmsg->res_status) {
+    case OGS_SBI_HTTP_STATUS_OK:
+    case OGS_SBI_HTTP_STATUS_NO_CONTENT:
+        break;
+    case OGS_SBI_HTTP_STATUS_NOT_FOUND:
+        /* The subscriber was removed between GET and PATCH */
+        ogs_warn("[%s] User not found", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_NOT_FOUND, recvmsg,
+                "User not found", udm_ue->supi,
+                OGS_SBI_APP_STRERROR_USER_NOT_FOUND));
+        return;
+    default:
+        hss_av_send_udr_error(udm_ue, stream, recvmsg);
+        return;
+    }
+
+    /*
+     * AMF separation bit cleared: "bit 0 of the AMF field of AUTN"
+     * (TS 33.401 clause 6.1.1), i.e. the most significant bit of amf[0].
+     *
+     * TS 33.401 clause 6.1.2: "if the "separation bit" is set to 0, the
+     * vector is usable in a non-EPS context only (e.g. GSM, UMTS). For
+     * authentication vectors with the "separation bit" set to 1, the
+     * secret keys CK and IK generated during AKA shall never leave the
+     * HSS." TS 33.501 clause 6.1.3.2 sets the bit for 5G-AKA in the same
+     * way. An IMS-AKA vector hands CK and IK to the S-CSCF
+     * (TS 33.203 clause 6.1.1), so the bit is cleared here.
+     *
+     * The 5G-AKA path and the Cx MAR of the Open5GS HSS use the AMF
+     * of the subscription as it is stored (8000 by default) and are
+     * not changed here.
+     */
+    memcpy(amf, request->amf, sizeof(amf));
+    amf[0] &= 0x7f;
+
+    AvList = OpenAPI_list_create();
+    ogs_assert(AvList);
+
+    for (i = 0; i < request->num_of_requested_vectors; i++) {
+        ogs_uint64_to_buffer(
+                (request->first_sqn + 32 * (uint64_t)i) & OGS_MAX_SQN,
+                OGS_SQN_LEN, sqn);
+        ogs_random(rand, sizeof(rand));
+
+        xres_len = sizeof(xres);
+        milenage_generate(request->opc, amf, request->k, sqn, rand,
+                autn, ik, ck, ak, xres, &xres_len);
+
+        ogs_hex_to_ascii(rand, sizeof(rand),
+                rand_string, sizeof(rand_string));
+        ogs_hex_to_ascii(xres, xres_len,
+                xres_string, sizeof(xres_string));
+        ogs_hex_to_ascii(autn, sizeof(autn),
+                autn_string, sizeof(autn_string));
+        ogs_hex_to_ascii(ck, sizeof(ck), ck_string, sizeof(ck_string));
+        ogs_hex_to_ascii(ik, sizeof(ik), ik_string, sizeof(ik_string));
+
+        Av = OpenAPI_av_ims_gba_eap_aka_create(
+                OpenAPI_hss_av_type_IMS_AKA,
+                ogs_strdup(rand_string), ogs_strdup(xres_string),
+                ogs_strdup(autn_string), ogs_strdup(ck_string),
+                ogs_strdup(ik_string));
+        ogs_assert(Av);
+        ogs_assert(Av->rand && Av->xres && Av->autn && Av->ck && Av->ik);
+
+        OpenAPI_list_add(AvList, Av);
+    }
+
+    /*
+     * The stack copies of CK and IK are cleared; the copies in the
+     * response model are released with it, as in the 5G-AKA path.
+     */
+    memset(ck, 0, sizeof(ck));
+    memset(ik, 0, sizeof(ik));
+    memset(ck_string, 0, sizeof(ck_string));
+    memset(ik_string, 0, sizeof(ik_string));
+
+    HssAuthenticationInfoResult = OpenAPI_hss_authentication_info_result_create(
+            NULL, OpenAPI_hss_authentication_vectors_create(
+                NULL, AvList, NULL));
+    ogs_assert(HssAuthenticationInfoResult);
+    ogs_assert(HssAuthenticationInfoResult->hss_authentication_vectors);
+
+    memset(&sendmsg, 0, sizeof(sendmsg));
+    sendmsg.HssAuthenticationInfoResult = HssAuthenticationInfoResult;
+
+    response = ogs_sbi_build_response(&sendmsg, OGS_SBI_HTTP_STATUS_OK);
+    ogs_assert(response);
+    ogs_assert(true == ogs_sbi_server_send_response(stream, response));
+
+    OpenAPI_hss_authentication_info_result_free(HssAuthenticationInfoResult);
+}
+
+void udm_nudr_dr_handle_hss_authentication(
+    udm_ue_t *udm_ue, ogs_sbi_message_t *recvmsg)
+{
+    udm_hss_av_request_t *request = NULL;
+    ogs_sbi_stream_t *stream = NULL;
+
+    ogs_assert(udm_ue);
+    ogs_assert(recvmsg);
+
+    /*
+     * Only the head of the list has a transaction towards the UDR, and
+     * it is released only after this answer or the CLIENT_WAIT timer.
+     */
+    request = udm_hss_av_request_head(udm_ue);
+    ogs_assert(request);
+
+    stream = ogs_sbi_stream_find_by_id(request->stream_id);
+    if (!stream) {
+        /*
+         * The consumer has gone. After a GET nothing is written; after
+         * a PATCH the SQN has moved on and the vectors are not built,
+         * which leaves a gap but never reuses an SQN.
+         */
+        ogs_warn("[%s] GetHssAv consumer has gone [%d]",
+                udm_ue->supi, request->stream_id);
+        udm_nudm_ueau_hss_av_finish_head(udm_ue);
+        return;
+    }
+
+    SWITCH(recvmsg->h.resource.component[3])
+    CASE(OGS_SBI_RESOURCE_NAME_AUTHENTICATION_SUBSCRIPTION)
+        SWITCH(recvmsg->h.method)
+        CASE(OGS_SBI_HTTP_METHOD_GET)
+            if (hss_av_handle_authentication_subscription(
+                        udm_ue, request, stream, recvmsg) == true)
+                return; /* waiting for the PATCH */
+            break;
+        CASE(OGS_SBI_HTTP_METHOD_PATCH)
+            hss_av_send_vectors(udm_ue, request, stream, recvmsg);
+            break;
+        DEFAULT
+            ogs_error("[%s] Invalid HTTP method [%s]",
+                    udm_ue->supi, recvmsg->h.method);
+            ogs_assert_if_reached();
+        END
+        break;
+
+    DEFAULT
+        ogs_error("[%s] Invalid resource name [%s]",
+                udm_ue->supi, recvmsg->h.resource.component[3]);
+        ogs_assert_if_reached();
+    END
+
+    udm_nudm_ueau_hss_av_finish_head(udm_ue);
 }
 
 bool udm_nudr_dr_handle_subscription_context(

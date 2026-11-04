@@ -51,6 +51,7 @@ void pcf_state_operational(ogs_fsm_t *s, pcf_event_t *e)
     ogs_sbi_object_t *sbi_object = NULL;
     ogs_sbi_xact_t *sbi_xact = NULL;
     ogs_pool_id_t sbi_xact_id = OGS_INVALID_POOL_ID;
+    ogs_pool_id_t sbi_object_id = OGS_INVALID_POOL_ID;
 
     int service_name_id = OpenAPI_service_name_NULL;
     OpenAPI_service_name_e service_name = OpenAPI_service_name_NULL;
@@ -803,9 +804,11 @@ void pcf_state_operational(ogs_fsm_t *s, pcf_event_t *e)
 
             ogs_assert(sbi_xact->assoc_stream_id >= OGS_MIN_POOL_ID &&
                     sbi_xact->assoc_stream_id <= OGS_MAX_POOL_ID);
-            stream = ogs_sbi_stream_find_by_id(sbi_xact->assoc_stream_id);
+            stream_id = sbi_xact->assoc_stream_id;
+            stream = ogs_sbi_stream_find_by_id(stream_id);
 
             service_name = sbi_xact->service_name;
+            sbi_object_id = sbi_xact->sbi_object_id;
 
             ogs_sbi_xact_remove(sbi_xact);
 
@@ -814,7 +817,7 @@ void pcf_state_operational(ogs_fsm_t *s, pcf_event_t *e)
 
             switch(sbi_object->type) {
             case OGS_SBI_OBJ_UE_TYPE:
-                pcf_ue_am_id = sbi_xact->sbi_object_id;
+                pcf_ue_am_id = sbi_object_id;
                 ogs_assert(pcf_ue_am_id >= OGS_MIN_POOL_ID &&
                         pcf_ue_am_id <= OGS_MAX_POOL_ID);
 
@@ -827,7 +830,7 @@ void pcf_state_operational(ogs_fsm_t *s, pcf_event_t *e)
                 break;
 
             case OGS_SBI_OBJ_SESS_TYPE:
-                sess_id = sbi_xact->sbi_object_id;
+                sess_id = sbi_object_id;
                 ogs_assert(sess_id >= OGS_MIN_POOL_ID &&
                         sess_id <= OGS_MAX_POOL_ID);
 
@@ -850,7 +853,7 @@ void pcf_state_operational(ogs_fsm_t *s, pcf_event_t *e)
 
             if (!stream) {
                 ogs_error("STREAM has already been removed [%d]",
-                        sbi_xact->assoc_stream_id);
+                        stream_id);
                 break;
             }
             ogs_assert(true ==

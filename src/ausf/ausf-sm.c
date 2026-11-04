@@ -458,7 +458,8 @@ void ausf_state_operational(ogs_fsm_t *s, ausf_event_t *e)
 
             ogs_assert(sbi_xact->assoc_stream_id >= OGS_MIN_POOL_ID &&
                     sbi_xact->assoc_stream_id <= OGS_MAX_POOL_ID);
-            stream = ogs_sbi_stream_find_by_id(sbi_xact->assoc_stream_id);
+            stream_id = sbi_xact->assoc_stream_id;
+            stream = ogs_sbi_stream_find_by_id(stream_id);
 
             ogs_sbi_xact_remove(sbi_xact);
 
@@ -466,7 +467,7 @@ void ausf_state_operational(ogs_fsm_t *s, ausf_event_t *e)
 
             if (!stream) {
                 ogs_error("STREAM has already been removed [%d]",
-                        sbi_xact->assoc_stream_id);
+                        stream_id);
                 break;
             }
             ogs_assert(true ==

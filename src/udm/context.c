@@ -211,6 +211,15 @@ void udm_ue_remove(udm_ue_t *udm_ue)
     e.udm_ue_id = udm_ue->id;
     ogs_fsm_fini(&udm_ue->sm, &e);
 
+    /*
+     * A transaction still pending towards the UDR or the NRF refers
+     * to this UE context by ID and through its SBI object. Remove it
+     * together with its timer; otherwise its answer or its expiry
+     * would be handled against a context that has gone, and its list
+     * node would stay linked into the released SBI object.
+     */
+    ogs_sbi_xact_remove_all(&udm_ue->sbi);
+
     /* Free SBI object memory */
     ogs_sbi_object_free(&udm_ue->sbi);
 
@@ -313,10 +322,13 @@ void udm_sess_remove(udm_sess_t *sess)
     e.sess_id = sess->id;
     ogs_fsm_fini(&sess->sm, &e);
 
-    /* Free SBI object memory */
+    /* Same as udm_ue_remove(): no transaction may outlive the session */
     if (ogs_list_count(&sess->sbi.xact_list))
         ogs_error("Session transaction [%d]",
                 ogs_list_count(&sess->sbi.xact_list));
+    ogs_sbi_xact_remove_all(&sess->sbi);
+
+    /* Free SBI object memory */
     ogs_sbi_object_free(&sess->sbi);
 
     OpenAPI_smf_registration_free(sess->smf_registration);

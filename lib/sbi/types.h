@@ -159,6 +159,17 @@ typedef enum {
 #define OGS_SBI_APP_STRERROR_UPF_NOT_RESPONDING "UPF_NOT_RESPONDING"
 #define OGS_SBI_APP_STRERROR_UE_NOT_REACHABLE "UE_NOT_REACHABLE"
 
+/*
+ * Nudm_UEAU application errors (TS 29.503 clause 6.3.7.3). They are
+ * only sent in ProblemDetails.cause and have no ogs_sbi_app_errno_e,
+ * which lists the Nsmf_PDUSession errors evaluated by the SMF.
+ */
+#define OGS_SBI_APP_STRERROR_USER_NOT_FOUND "USER_NOT_FOUND"
+#define OGS_SBI_APP_STRERROR_AUTHENTICATION_REJECTED \
+    "AUTHENTICATION_REJECTED"
+#define OGS_SBI_APP_STRERROR_UNSUPPORTED_AUTHENTICATION_METHOD \
+    "UNSUPPORTED_AUTHENTICATION_METHOD"
+
 const char *ogs_sbi_app_strerror(ogs_sbi_app_errno_e e);
 ogs_sbi_app_errno_e ogs_sbi_app_errno(const char *str);
 

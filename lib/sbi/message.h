@@ -100,6 +100,9 @@ extern "C" {
 
 #define OGS_SBI_RESOURCE_NAME_SECURITY_INFORMATION  "security-information"
 #define OGS_SBI_RESOURCE_NAME_GENERATE_AUTH_DATA    "generate-auth-data"
+#define OGS_SBI_RESOURCE_NAME_HSS_SECURITY_INFORMATION \
+                                            "hss-security-information"
+#define OGS_SBI_RESOURCE_NAME_GENERATE_AV           "generate-av"
 #define OGS_SBI_RESOURCE_NAME_AUTH_EVENTS           "auth-events"
 #define OGS_SBI_RESOURCE_NAME_REGISTRATIONS         "registrations"
 #define OGS_SBI_RESOURCE_NAME_AMF_3GPP_ACCESS       "amf-3gpp-access"
@@ -374,6 +377,9 @@ extern "C" {
 #define OGS_SBI_PARAM_DATASET_NAME_SM                    "SM"
 #define OGS_SBI_MAX_NUM_OF_DATASETNAMES                   8
 
+/* TS 29.503 clause 6.3.6.3.2: NumOfRequestedVectors, maximum 5 */
+#define OGS_SBI_MAX_NUM_OF_HSS_AV                         5
+
 #define OGS_SBI_CONTENT_JSON_TYPE                   \
     OGS_SBI_APPLICATION_TYPE "/" OGS_SBI_APPLICATION_JSON_TYPE
 #define OGS_SBI_CONTENT_PROBLEM_TYPE                \
@@ -554,6 +560,8 @@ typedef struct ogs_sbi_message_s {
     OpenAPI_authentication_info_t *AuthenticationInfo;
     OpenAPI_authentication_info_request_t *AuthenticationInfoRequest;
     OpenAPI_authentication_info_result_t *AuthenticationInfoResult;
+    OpenAPI_hss_authentication_info_request_t *HssAuthenticationInfoRequest;
+    OpenAPI_hss_authentication_info_result_t *HssAuthenticationInfoResult;
     OpenAPI_authentication_subscription_t *AuthenticationSubscription;
     OpenAPI_ue_authentication_ctx_t *UeAuthenticationCtx;
     OpenAPI_confirmation_data_t *ConfirmationData;

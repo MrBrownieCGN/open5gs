@@ -95,6 +95,12 @@ void ogs_sbi_message_free(ogs_sbi_message_t *message)
     if (message->AuthenticationInfoResult)
         OpenAPI_authentication_info_result_free(
                 message->AuthenticationInfoResult);
+    if (message->HssAuthenticationInfoRequest)
+        OpenAPI_hss_authentication_info_request_free(
+                message->HssAuthenticationInfoRequest);
+    if (message->HssAuthenticationInfoResult)
+        OpenAPI_hss_authentication_info_result_free(
+                message->HssAuthenticationInfoResult);
     if (message->AuthenticationSubscription)
         OpenAPI_authentication_subscription_free(
                 message->AuthenticationSubscription);
@@ -1559,6 +1565,14 @@ static char *build_json(const ogs_sbi_message_t *message)
         item = OpenAPI_authentication_info_result_convertToJSON(
                 message->AuthenticationInfoResult);
         ogs_assert(item);
+    } else if (message->HssAuthenticationInfoRequest) {
+        item = OpenAPI_hss_authentication_info_request_convertToJSON(
+                message->HssAuthenticationInfoRequest);
+        ogs_assert(item);
+    } else if (message->HssAuthenticationInfoResult) {
+        item = OpenAPI_hss_authentication_info_result_convertToJSON(
+                message->HssAuthenticationInfoResult);
+        ogs_assert(item);
     } else if (message->AuthenticationSubscription) {
         item = OpenAPI_authentication_subscription_convertToJSON(
                 message->AuthenticationSubscription);
@@ -2037,6 +2051,35 @@ static int parse_json(ogs_sbi_message_t *message,
                     rv = OGS_ERROR;
                     ogs_error("Unknown resource name [%s]",
                             message->h.resource.component[2]);
+                END
+                break;
+
+            CASE(OGS_SBI_RESOURCE_NAME_HSS_SECURITY_INFORMATION)
+                /* /{supi}/hss-security-information/{hssAuthType}/generate-av */
+                SWITCH(message->h.resource.component[3])
+                CASE(OGS_SBI_RESOURCE_NAME_GENERATE_AV)
+                    if (message->res_status == 0) {
+                        message->HssAuthenticationInfoRequest =
+                        OpenAPI_hss_authentication_info_request_parseFromJSON(
+                                item);
+                        if (!message->HssAuthenticationInfoRequest) {
+                            rv = OGS_ERROR;
+                            ogs_error("JSON parse error");
+                        }
+                    } else if (message->res_status == OGS_SBI_HTTP_STATUS_OK) {
+                        message->HssAuthenticationInfoResult =
+                        OpenAPI_hss_authentication_info_result_parseFromJSON(
+                                item);
+                        if (!message->HssAuthenticationInfoResult) {
+                            rv = OGS_ERROR;
+                            ogs_error("JSON parse error");
+                        }
+                    }
+                    break;
+                DEFAULT
+                    rv = OGS_ERROR;
+                    ogs_error("Unknown resource name [%s]",
+                            message->h.resource.component[3]);
                 END
                 break;
 

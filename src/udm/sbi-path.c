@@ -35,6 +35,8 @@ int udm_sbi_open(void)
     ogs_sbi_nf_instance_add_allowed_nf_type(nf_instance, OpenAPI_nf_type_AMF);
     ogs_sbi_nf_instance_add_allowed_nf_type(nf_instance, OpenAPI_nf_type_SMF);
     ogs_sbi_nf_instance_add_allowed_nf_type(nf_instance, OpenAPI_nf_type_AUSF);
+    /* TS 29.503 clause 5.4.2.4: GetHssAv is invoked by the HSS */
+    ogs_sbi_nf_instance_add_allowed_nf_type(nf_instance, OpenAPI_nf_type_HSS);
 
     /* Build NF service information. It will be transmitted to NRF. */
     if (ogs_sbi_nf_service_is_available(OpenAPI_service_name_nudm_ueau)) {
@@ -44,6 +46,7 @@ int udm_sbi_open(void)
         ogs_sbi_nf_service_add_version(
                     service, OGS_SBI_API_V1, OGS_SBI_API_V1_0_0, NULL);
         ogs_sbi_nf_service_add_allowed_nf_type(service, OpenAPI_nf_type_AUSF);
+        ogs_sbi_nf_service_add_allowed_nf_type(service, OpenAPI_nf_type_HSS);
     }
 
     if (ogs_sbi_nf_service_is_available(OpenAPI_service_name_nudm_uecm)) {

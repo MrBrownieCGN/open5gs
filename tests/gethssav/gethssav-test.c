@@ -1058,6 +1058,57 @@ static void test9_func(abts_case *tc, void *data)
     ogs_free(supi);
 }
 
+/*
+ * The HSS finds the UDM through the NRF: NF discovery with
+ * requester-nf-type=HSS for nudm-ueau returns the UDM, which lists the
+ * HSS among the NF types allowed to use the UDM and nudm-ueau.
+ */
+static void test10_func(abts_case *tc, void *data)
+{
+    CURL *curl = NULL;
+    test_http_body_t body;
+    cJSON *result = NULL, *instances = NULL, *instance = NULL, *type = NULL;
+    long status = 0;
+    bool found = false;
+
+    memset(&body, 0, sizeof(body));
+
+    curl = curl_easy_init();
+    ogs_assert(curl);
+
+    curl_easy_setopt(curl, CURLOPT_URL,
+            "http://127.0.0.10:7777/nnrf-disc/v1/nf-instances"
+            "?target-nf-type=UDM&requester-nf-type=HSS"
+            "&service-names=nudm-ueau");
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION,
+            CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, test_http_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+    if (curl_easy_perform(curl) == CURLE_OK)
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+
+    ABTS_INT_EQUAL(tc, 200, (int)status);
+    result = body.data ? cJSON_Parse(body.data) : NULL;
+    if (body.data)
+        ogs_free(body.data);
+
+    instances = result ?
+        cJSON_GetObjectItemCaseSensitive(result, "nfInstances") : NULL;
+    if (instances && cJSON_IsArray(instances)) {
+        cJSON_ArrayForEach(instance, instances) {
+            type = cJSON_GetObjectItemCaseSensitive(instance, "nfType");
+            if (type && cJSON_IsString(type) &&
+                    !strcmp(type->valuestring, "UDM"))
+                found = true;
+        }
+    }
+    ABTS_TRUE(tc, found);
+    cJSON_Delete(result);
+}
+
 abts_suite *test_gethssav(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
@@ -1071,6 +1122,7 @@ abts_suite *test_gethssav(abts_suite *suite)
     abts_run_test(suite, test7_func, NULL);
     abts_run_test(suite, test8_func, NULL);
     abts_run_test(suite, test9_func, NULL);
+    abts_run_test(suite, test10_func, NULL);
 
     return suite;
 }
